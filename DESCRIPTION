@@ -1,0 +1,31 @@
+Package: elicitcausal
+Type: Package
+Title: Elicit Conditional Probability Tables from Causal DAGs
+Version: 0.1.0
+Authors@R: person("Robert", "Kubinec", email = "rmk7@nyu.edu",
+    role = c("aut", "cre"))
+Description: Accepts a causal DAG in dagitty format and interactively elicits
+    conditional probability distributions from users. Assumes all nodes are
+    binary (0/1) variables. Users provide probabilities (or Likert-scale
+    ratings) for each parent combination of every node. Computes the full
+    joint distribution via the chain rule of probability and reports Shannon
+    entropy. Supports querying marginal and conditional distributions from
+    the elicited model.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports:
+    dagitty
+Suggests:
+    testthat (>= 3.0.0),
+    quarto,
+    knitr,
+    CausalQueries,
+    shiny,
+    ggdag,
+    ggplot2
+Config/testthat/edition: 3
+VignetteBuilder: quarto
+RoxygenNote: 7.3.2
+URL: https://github.com/rmk118/elicitcausal
+BugReports: https://github.com/rmk118/elicitcausal/issues

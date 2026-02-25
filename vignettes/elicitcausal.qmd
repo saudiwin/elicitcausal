@@ -1,0 +1,582 @@
+---
+title: "Getting Started with elicitcausal"
+author: "Robert Kubinec"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    highlight-style: github
+vignette: >
+  %\VignetteIndexEntry{Getting Started with elicitcausal}
+  %\VignetteEngine{quarto::html}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse  = TRUE,
+  comment   = "#>"
+)
+```
+
+## Overview
+
+**elicitcausal** turns a causal DAG drawn in
+[dagitty](https://www.dagitty.net) into a fully specified Bayesian network
+by asking you — or your subject-matter experts — for conditional
+probabilities one question at a time.
+
+The workflow is:
+
+1. Specify the causal structure as a `dagitty` object.
+2. Call `elicit_dag_priors()`. The function walks each node in topological
+   order and asks for $P(\text{node} = 1 \mid \text{parent combination})$
+   for every possible combination of binary parent values.
+3. Receive the elicited conditional probability tables (CPTs), the full
+   joint distribution over all $2^n$ states, and Shannon entropy.
+4. Query the resulting model with `get_marginal()`, `get_conditional()`, and
+   `get_mutual_info()`.
+
+All nodes are assumed **binary** (0 = absent/false, 1 = present/true).
+
+---
+
+## Installation
+
+```{r install, eval=FALSE}
+# Install from GitHub (once the package is available)
+remotes::install_github("rmk118/elicitcausal")
+```
+
+```{r load}
+library(elicitcausal)
+library(dagitty)
+```
+
+---
+
+## A minimal example: X → Y
+
+The simplest possible causal DAG has one cause $X$ and one effect $Y$.
+
+```{r dag-xy}
+dag_xy <- dagitty("dag { X -> Y }")
+```
+
+In an interactive session you would call `elicit_dag_priors(dag_xy)` and
+type probabilities at the prompts. Here we supply them via the `.responses`
+argument so the vignette runs without user input.
+
+`X` is a root node, so we need only its **prior** probability. `Y` has `X`
+as its single parent, so we need two conditional probabilities: one for
+each value that `X` can take.
+
+```{r simple-run}
+result_xy <- elicit_dag_priors(
+  dag_xy,
+  target = "Y",
+  .responses = list(
+    X = list(0.30),         # P(X = 1) = 0.30
+    Y = list(0.10, 0.75)    # P(Y=1|X=0) = 0.10,  P(Y=1|X=1) = 0.75
+  )
+)
+```
+
+The printed output shows:
+
+- **Conditional probability tables** — one per node.
+- **Joint distribution summary** — Shannon entropy of the $2^n$-state
+  distribution and the top five most probable joint states.
+- **Target marginal** — $P(Y = 0)$ and $P(Y = 1)$ after marginalising over
+  $X$, plus the marginal entropy $H(Y)$.
+
+---
+
+## Input modes
+
+### Probability mode (default)
+
+In probability mode you type decimal values directly. Any number in $[0,
+1]$ is accepted. This is the most precise option and works well when
+experts are comfortable with numerical probabilities.
+
+```{r prob-mode, eval=FALSE}
+# Interactive usage — not run here
+result <- elicit_dag_priors(dag_xy, mode = "probability")
+```
+
+```
+P(X = 1) = 0.3
+P(Y = 1 | X = 0) = 0.10
+P(Y = 1 | X = 1) = 0.75
+```
+
+### Likert mode
+
+Likert mode presents a seven-point verbal scale based on the
+[Sherman Kent](https://en.wikipedia.org/wiki/Words_of_estimative_probability)
+probability words used in intelligence analysis. Experts choose the option
+that best matches their belief, and the package maps it to a representative
+probability.
+
+| Key | Label | Probability |
+|-----|---------------------------------------|-------------|
+| 1 | Almost certainly not | ~5% |
+| 2 | Very unlikely | ~15% |
+| 3 | Unlikely | ~30% |
+| 4 | About as likely as not | ~50% |
+| 5 | Likely | ~70% |
+| 6 | Very likely | ~85% |
+| 7 | Almost certain | ~95% |
+
+A decimal value can always be typed instead of a key, giving experts the
+flexibility to be more precise when they want to.
+
+```{r likert-mode}
+result_likert <- elicit_dag_priors(
+  dag_xy,
+  mode   = "likert",
+  target = "Y",
+  .responses = list(
+    X = list("3"),       # "Unlikely" -> 0.30
+    Y = list("2", "6")   # X=0: "Very unlikely" -> 0.15 | X=1: "Very likely" -> 0.85
+  )
+)
+```
+
+---
+
+## Common DAG structures
+
+### Chain: X → Y → Z
+
+In a chain, $X$ influences $Z$ only *through* $Y$. Conditioning on $Y$
+makes $X$ and $Z$ independent (the Markov condition).
+
+```{r chain}
+dag_chain <- dagitty("dag { X -> Y -> Z }")
+
+result_chain <- elicit_dag_priors(
+  dag_chain,
+  target     = "Z",
+  verbose    = FALSE,   # suppress output — we'll print manually
+  .responses = list(
+    X = list(0.40),          # P(X = 1) = 0.40
+    Y = list(0.15, 0.80),    # P(Y=1|X=0) = 0.15, P(Y=1|X=1) = 0.80
+    Z = list(0.20, 0.90)     # P(Z=1|Y=0) = 0.20, P(Z=1|Y=1) = 0.90
+  )
+)
+
+print(result_chain)
+```
+
+We can verify the Markov condition by checking that $X \perp\!\!\!\perp Z
+\mid Y$:
+
+```{r chain-markov}
+# P(Z=1 | Y=1)  —  should not change when we also condition on X
+p_z_y1       <- get_conditional(result_chain, c(Z = 1L), c(Y = 1L))
+p_z_y1_x0    <- get_conditional(result_chain, c(Z = 1L), c(Y = 1L, X = 0L))
+p_z_y1_x1    <- get_conditional(result_chain, c(Z = 1L), c(Y = 1L, X = 1L))
+
+cat(sprintf("P(Z=1 | Y=1)         = %.4f\n", p_z_y1))
+cat(sprintf("P(Z=1 | Y=1, X=0)    = %.4f\n", p_z_y1_x0))
+cat(sprintf("P(Z=1 | Y=1, X=1)    = %.4f\n", p_z_y1_x1))
+```
+
+All three values match — $X$ carries no additional information about $Z$
+once $Y$ is known.
+
+### Fork: Z → X, Z → Y (common cause)
+
+A fork (or "common cause") structure creates a spurious association
+between $X$ and $Y$ through their shared parent $Z$. Conditioning on $Z$
+removes that association.
+
+```{r fork}
+dag_fork <- dagitty("dag { Z -> X ; Z -> Y }")
+
+result_fork <- elicit_dag_priors(
+  dag_fork,
+  verbose    = FALSE,
+  .responses = list(
+    Z = list(0.50),
+    X = list(0.10, 0.90),   # X is strongly driven by Z
+    Y = list(0.10, 0.90)    # Y is equally strongly driven by Z
+  )
+)
+
+# Marginal association between X and Y (should be non-zero due to Z)
+mi_xy_marginal <- get_mutual_info(result_fork, "X", "Y")
+cat(sprintf("I(X ; Y)         = %.4f bits\n", mi_xy_marginal))
+
+# After conditioning on Z=0: should be close to zero
+p_y1_x1_z0 <- get_conditional(result_fork, c(Y = 1L), c(X = 1L, Z = 0L))
+p_y1_x0_z0 <- get_conditional(result_fork, c(Y = 1L), c(X = 0L, Z = 0L))
+cat(sprintf("P(Y=1|X=1,Z=0) = %.4f\n", p_y1_x1_z0))
+cat(sprintf("P(Y=1|X=0,Z=0) = %.4f\n", p_y1_x0_z0))
+cat("(These should match — X provides no info about Y once Z is known)\n")
+```
+
+### Collider: X → Z ← Y
+
+A collider is the reverse: $Z$ has two causes but those causes are
+otherwise unrelated. Unlike chains and forks, conditioning **on** the
+collider $Z$ *opens* a path between $X$ and $Y$, inducing a spurious
+association even though none existed marginally.
+
+```{r collider}
+dag_coll <- dagitty("dag { X -> Z ; Y -> Z }")
+
+result_coll <- elicit_dag_priors(
+  dag_coll,
+  target     = "Z",
+  verbose    = FALSE,
+  .responses = list(
+    X = list(0.50),
+    Y = list(0.50),
+    # Z = 1 only if both causes are present
+    Z = list(0.02, 0.30, 0.30, 0.95)
+    # order: P(Z=1|X=0,Y=0), P(Z=1|X=1,Y=0),
+    #        P(Z=1|X=0,Y=1), P(Z=1|X=1,Y=1)
+  )
+)
+
+# Marginal: X and Y are independent
+mi_xy  <- get_mutual_info(result_coll, "X", "Y")
+cat(sprintf("I(X ; Y) marginal     = %.6f bits (should be ~0)\n", mi_xy))
+
+# Conditional on Z=1: X and Y become associated ("explaining away")
+p_x1_y1_z1 <- get_conditional(result_coll, c(X = 1L), c(Y = 1L, Z = 1L))
+p_x1_y0_z1 <- get_conditional(result_coll, c(X = 1L), c(Y = 0L, Z = 1L))
+cat(sprintf("P(X=1 | Y=1, Z=1)    = %.4f\n", p_x1_y1_z1))
+cat(sprintf("P(X=1 | Y=0, Z=1)    = %.4f\n", p_x1_y0_z1))
+cat("(X becomes less probable when Y is known to be 1 and Z is known to be 1)\n")
+```
+
+---
+
+## Querying the model
+
+### Marginal distributions
+
+`get_marginal()` sums the joint distribution over all other variables.
+
+```{r marginals}
+get_marginal(result_chain, "X")
+get_marginal(result_chain, "Z")
+```
+
+### Conditional probabilities
+
+`get_conditional()` accepts named integer vectors for both the query and
+the evidence. Conditions on any subset of nodes.
+
+```{r conditionals}
+# P(Z = 1 | X = 1)  — propagating belief forward through the chain
+get_conditional(result_chain, query = c(Z = 1L), evidence = c(X = 1L))
+
+# P(X = 1 | Z = 1)  — updating belief about a cause given an effect
+get_conditional(result_chain, query = c(X = 1L), evidence = c(Z = 1L))
+```
+
+### Mutual information
+
+`get_mutual_info()` measures how much knowing one variable reduces
+uncertainty about another. It is always non-negative and equals zero for
+independent variables.
+
+```{r mutual-info}
+# Chain: information degrades along the chain
+mi_xz <- get_mutual_info(result_chain, "X", "Z")
+mi_xy <- get_mutual_info(result_chain, "X", "Y")
+mi_yz <- get_mutual_info(result_chain, "Y", "Z")
+
+cat(sprintf("I(X ; Y) = %.4f bits\n", mi_xy))
+cat(sprintf("I(Y ; Z) = %.4f bits\n", mi_yz))
+cat(sprintf("I(X ; Z) = %.4f bits   (weakest — one hop further)\n", mi_xz))
+```
+
+The data processing inequality guarantees $I(X; Z) \leq \min\{I(X; Y),
+I(Y; Z)\}$ in a chain, which we can verify:
+
+```{r dpi}
+stopifnot(mi_xz <= min(mi_xy, mi_yz) + 1e-9)
+cat("Data processing inequality holds.\n")
+```
+
+---
+
+## Entropy interpretation
+
+Shannon entropy $H = -\sum_i p_i \log_2 p_i$ (in bits) measures
+uncertainty in the joint distribution.
+
+- **Maximum entropy** ($H = n$ bits for $n$ binary nodes) arises when all
+  $2^n$ joint states are equally probable — maximum ignorance.
+- **Minimum entropy** ($H = 0$) means only one state has nonzero
+  probability — complete certainty.
+- The **entropy ratio** $H / H_{\max}$ (printed as "% of maximum") is a
+  convenient summary: values near 100% indicate that the elicited
+  probabilities leave a great deal of uncertainty, while low values reflect
+  strong determinism in the model.
+
+```{r entropy-example}
+# A very deterministic chain: X -> Y -> Z with near-certain links
+result_det <- elicit_dag_priors(
+  dag_chain, verbose = FALSE,
+  .responses = list(
+    X = list(0.5),
+    Y = list(0.02, 0.98),
+    Z = list(0.02, 0.98)
+  )
+)
+
+# A very uncertain chain: links are all near 50 / 50
+result_unc <- elicit_dag_priors(
+  dag_chain, verbose = FALSE,
+  .responses = list(
+    X = list(0.5),
+    Y = list(0.45, 0.55),
+    Z = list(0.45, 0.55)
+  )
+)
+
+cat(sprintf("Deterministic model  H = %.4f bits  (%.1f%% of max)\n",
+            result_det$entropy,
+            100 * result_det$entropy / log2(8)))
+
+cat(sprintf("Uncertain model      H = %.4f bits  (%.1f%% of max)\n",
+            result_unc$entropy,
+            100 * result_unc$entropy / log2(8)))
+```
+
+The per-node marginal entropies stored in `result$node_entropies` are
+useful for identifying which variables contribute most to overall
+uncertainty.
+
+```{r node-entropies}
+result_chain$node_entropies
+```
+
+---
+
+## A worked applied example
+
+Suppose you are modelling whether a randomised controlled trial ($T$,
+treatment) leads to a positive outcome ($O$) through a biological pathway
+($M$, mediator), with unmeasured confounding captured by a background
+factor ($U$).
+
+```{r applied-dag}
+dag_rct <- dagitty("dag {
+  T -> M -> O
+  U -> M
+  U -> O
+}")
+```
+
+```{r applied-elicit}
+result_rct <- elicit_dag_priors(
+  dag_rct,
+  target  = "O",
+  verbose = FALSE,
+  .responses = list(
+    T = list(0.50),          # balanced randomisation
+    U = list(0.30),          # 30% have the background risk factor
+    M = list(                # P(M=1 | T, U): 4 combinations
+      0.05,   # T=0, U=0
+      0.20,   # T=1, U=0
+      0.30,   # T=0, U=1
+      0.60    # T=1, U=1
+    ),
+    O = list(                # P(O=1 | M, U): 4 combinations
+      0.10,   # M=0, U=0
+      0.70,   # M=1, U=0
+      0.25,   # M=0, U=1
+      0.85    # M=1, U=1
+    )
+  )
+)
+```
+
+```{r applied-queries}
+# Intent-to-treat effect: P(O=1|T=1) vs P(O=1|T=0)
+p_o_t1 <- get_conditional(result_rct, c(O = 1L), c(T = 1L))
+p_o_t0 <- get_conditional(result_rct, c(O = 1L), c(T = 0L))
+cat(sprintf("P(O=1 | T=1) = %.4f\n", p_o_t1))
+cat(sprintf("P(O=1 | T=0) = %.4f\n", p_o_t0))
+cat(sprintf("Risk difference = %.4f\n", p_o_t1 - p_o_t0))
+
+# How much of the variation in O is explained by M?
+cat(sprintf("\nI(M ; O) = %.4f bits\n", get_mutual_info(result_rct, "M", "O")))
+cat(sprintf("I(T ; O) = %.4f bits\n", get_mutual_info(result_rct, "T", "O")))
+cat(sprintf("I(U ; O) = %.4f bits\n", get_mutual_info(result_rct, "U", "O")))
+
+# Joint entropy summary
+cat(sprintf("\nJoint entropy: %.4f / %.4f bits (%.1f%%)\n",
+            result_rct$entropy,
+            log2(2^4),
+            100 * result_rct$entropy / log2(2^4)))
+```
+
+---
+
+## Converting to a CausalQueries model
+
+`to_causalqueries()` lifts an `elicit_dag_result` into a
+[CausalQueries](https://integrated-inferences.github.io/CausalQueries/)
+`causal_model`. This unlocks **potential-outcomes queries** — statements
+like "what is the probability that $T$ was the actual cause of $O$ for a
+unit that received treatment and recovered?" — that are not expressible
+with the joint distribution alone.
+
+```{r cq-load, message=FALSE}
+library(CausalQueries)
+```
+
+### How the conversion works
+
+A CPT specifies $P(\text{node}=1 \mid \text{parents}=\mathbf{c})$ for
+each observed parent combination $\mathbf{c}$. CausalQueries instead
+parameterises the model by **nodal types** — complete response functions
+$\theta : \{0,1\}^k \to \{0,1\}$ that specify a node's value for *every*
+possible parent combination simultaneously. For a node with $k$ parents
+there are $2^{2^k}$ such functions.
+
+`to_causalqueries()` converts using the **independence of potential
+outcomes** assumption: the responses $Y(\mathbf{c})$ for different parent
+combinations are treated as independent Bernoulli draws. This gives
+
+$$P(\theta) = \prod_{\mathbf{c}\,\in\,\{0,1\}^k}
+  P\!\left(Y = \theta(\mathbf{c}) \mid \text{parents} = \mathbf{c}\right).$$
+
+For a single binary parent this produces four nodal types:
+
+| Type | Meaning | Probability |
+|------|---------|-------------|
+| `00` | $Y=0$ regardless of $X$ ("never") | $(1-p_0)(1-p_1)$ |
+| `10` | $Y=1$ when $X=0$, $Y=0$ when $X=1$ (contrarian) | $p_0(1-p_1)$ |
+| `01` | $Y=0$ when $X=0$, $Y=1$ when $X=1$ (complier) | $(1-p_0)p_1$ |
+| `11` | $Y=1$ regardless of $X$ ("always") | $p_0 p_1$ |
+
+where $p_0 = P(Y=1\mid X=0)$ and $p_1 = P(Y=1\mid X=1)$. Crucially, the
+CPT marginals are always exactly recovered:
+$P(Y=1\mid X=0) = P(\theta_{10}) + P(\theta_{11}) = p_0$.
+
+### Inspecting the parameter table
+
+```{r cq-xy}
+cq_xy <- to_causalqueries(result_xy)
+cq_xy$parameters_df[, c("param_names", "nodal_type", "param_value")]
+```
+
+The `param_value` column now holds the nodal-type probabilities. For $Y$:
+complier (`Y.01`) is by far the most probable type because the elicited
+probabilities ($p_0 = 0.10$, $p_1 = 0.75$) strongly favour a positive
+effect.
+
+```{r cq-xy-check}
+# Recover P(Y=1|X=1) = P(Y.01) + P(Y.11)
+with(
+  subset(cq_xy$parameters_df, node == "Y"),
+  sum(param_value[nodal_type %in% c("01", "11")])
+)
+```
+
+### Causal queries on the RCT model
+
+Convert the applied RCT result from the previous section:
+
+```{r cq-rct, warning=FALSE}
+cq_rct <- to_causalqueries(result_rct)
+```
+
+**Average treatment effect** — probability that treatment causes a
+positive outcome:
+
+```{r cq-ate, warning=FALSE}
+query_model(
+  cq_rct,
+  query  = "O[T=1] > O[T=0]",
+  using  = "parameters"
+)
+```
+
+**Probability of harm** — probability that treatment *prevents* recovery:
+
+```{r cq-harm, warning=FALSE}
+query_model(
+  cq_rct,
+  query  = "O[T=1] < O[T=0]",
+  using  = "parameters"
+)
+```
+
+**Natural indirect effect through the mediator** — probability that
+the treatment's benefit operates *via* $M$:
+
+```{r cq-nie, warning=FALSE}
+# Compare O under T=1 vs the counterfactual where M is held at M[T=0]
+query_model(
+  cq_rct,
+  query  = "O[T=1] > O[T=1, M=M[T=0]]",
+  using  = "parameters"
+)
+```
+
+The indirect effect query isolates the component of the treatment effect
+that runs through the biological pathway $M$: it compares what the outcome
+would be under treatment to what it would have been under treatment *had
+the mediator not changed*. A positive value indicates that the pathway
+$T \to M \to O$ carries part of the benefit.
+
+### Updating with observed data
+
+Once you have collected data, CausalQueries can update the nodal-type
+distribution using `update_model()`, treating the elicited probabilities
+as a prior:
+
+```{r cq-update, eval=FALSE}
+# Simulate 200 observations from the model (for illustration)
+set.seed(42)
+obs_data <- simulate_data(cq_rct, n = 200)
+
+# Update: elicited priors + observed data -> posterior
+cq_updated <- update_model(cq_rct, obs_data)
+
+# Re-run the ATE query on the posterior
+query_model(cq_updated, query = "O[T=1] > O[T=0]", using = "posteriors")
+```
+
+This Bayesian updating workflow makes `to_causalqueries()` particularly
+useful for **prior elicitation**: you encode domain knowledge before data
+collection, then update once evidence arrives.
+
+---
+
+## Tips for effective elicitation
+
+**Decompose before you elicit.** A node with $k$ parents requires
+$2^k$ probability assessments. For $k \geq 4$ consider whether the DAG
+can be restructured so that no node has more than three parents.
+
+**Use Likert mode for non-statisticians.** When working with domain
+experts unfamiliar with probability notation, the verbal scale reduces
+cognitive load and tends to produce more internally consistent responses.
+Experts can still override with a decimal when they want to be precise.
+
+**Use `.responses` for reproducibility.** Embed your final elicited values
+in a script using the `.responses` argument so analyses can be re-run
+without re-prompting.
+
+**Entropy as a calibration check.** An entropy ratio above ~90% often
+indicates that the elicited probabilities are all close to 0.5, which may
+mean the expert genuinely has little information — or that the questions
+were too difficult. Review the CPTs and consider simplifying the model.
+
+**Sensitivity analysis.** Run `elicit_dag_priors()` multiple times with
+slightly perturbed probabilities to see how sensitive your conclusions are
+to the specific values provided. The `.responses` argument makes this
+straightforward to script.
