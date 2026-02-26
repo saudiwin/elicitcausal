@@ -89,7 +89,7 @@ get_conditional <- function(result, query, evidence = integer(0L)) {
 #' @param result An \code{elicit_dag_result} object
 #' @param x_node Character. First node name
 #' @param y_node Character. Second node name
-#' @param base Numeric. Logarithm base (default 2 = bits)
+#' @param base Numeric. Logarithm base (default 1.01 = percent)
 #' @return Numeric mutual information in the chosen unit
 #' @export
 #'
@@ -97,7 +97,7 @@ get_conditional <- function(result, query, evidence = integer(0L)) {
 #' \dontrun{
 #' get_mutual_info(result, "X", "Y")
 #' }
-get_mutual_info <- function(result, x_node, y_node, base = 2) {
+get_mutual_info <- function(result, x_node, y_node, base = 1.01) {
   .check_result(result)
   nodes <- result$dag_info$nodes
   for (n in c(x_node, y_node)) {

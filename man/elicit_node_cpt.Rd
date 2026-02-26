@@ -4,7 +4,13 @@
 \alias{elicit_node_cpt}
 \title{Elicit a conditional probability table for a single node}
 \usage{
-elicit_node_cpt(node, parent_names, mode = "probability", .responses = NULL)
+elicit_node_cpt(
+  node,
+  parent_names,
+  mode = "probability",
+  labels = NULL,
+  .responses = NULL
+)
 }
 \arguments{
 \item{node}{Character. Name of the node}

@@ -9,7 +9,8 @@ elicit_dag_priors(
   mode = c("probability", "likert"),
   target = NULL,
   verbose = TRUE,
-  .responses = NULL
+  .responses = NULL,
+  labels = NULL
 )
 }
 \arguments{
@@ -27,6 +28,16 @@ and a result summary.}
 
 \item{.responses}{Named list of pre-specified responses for non-interactive
 use. See the "Non-interactive use" section for the expected structure.}
+
+\item{labels}{Optional named list of value labels.  Each element must be a
+length-2 character vector \code{c(label_for_0, label_for_1)} giving
+human-readable names for the two values of that node (e.g.
+\code{list(X = c("untreated", "treated"), Y = c("no", "yes"))}).  When
+supplied, each console prompt is accompanied by a plain-English sentence
+such as \emph{"How likely is Y to be 'yes' when X is 'treated'?"}.
+Labels are stored in the returned result object and forwarded to the
+Shiny app when using \code{\link{launch_app}}.  Nodes without an entry
+in \code{labels} display numeric values (0 / 1) in the sentence.}
 }
 \value{
 An object of class \code{"elicit_dag_result"}, invisibly. It is a

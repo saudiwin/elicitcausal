@@ -1,7 +1,8 @@
-test_that("shannon_entropy of uniform distribution is log2(n)", {
-  # 4 equally likely states -> 2 bits
+test_that("shannon_entropy of uniform distribution is log_1.01(n)", {
+  # 4 equally likely states -> log_1.01(4)
   probs <- rep(0.25, 4)
-  expect_equal(elicitcausal:::shannon_entropy(probs), 2, tolerance = 1e-12)
+  expect_equal(elicitcausal:::shannon_entropy(probs),
+               log(4, base = 1.01), tolerance = 1e-9)
 })
 
 test_that("shannon_entropy of degenerate distribution is 0", {
@@ -10,8 +11,8 @@ test_that("shannon_entropy of degenerate distribution is 0", {
 
 test_that("shannon_entropy handles zero probabilities without error", {
   expect_no_error(elicitcausal:::shannon_entropy(c(0, 0.5, 0.5)))
-  expect_equal(elicitcausal:::shannon_entropy(c(0, 0.5, 0.5)), 1,
-               tolerance = 1e-12)
+  expect_equal(elicitcausal:::shannon_entropy(c(0, 0.5, 0.5)),
+               log(2, base = 1.01), tolerance = 1e-9)
 })
 
 test_that("conditional_entropy H(Y|X) <= H(Y)", {

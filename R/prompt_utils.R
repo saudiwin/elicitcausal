@@ -50,6 +50,65 @@ format_query <- function(node, parent_values) {
 }
 
 
+#' Default value labels used when the caller supplies no \code{labels}
+#' @keywords internal
+.DEFAULT_LABELS <- c("Low", "High")   # index 1 = value 0, index 2 = value 1
+
+
+#' Resolve the label for one node value
+#'
+#' Returns the user-supplied label if available, otherwise falls back to
+#' \code{"Low"} (value 0) or \code{"High"} (value 1).
+#' @keywords internal
+.node_val_label <- function(node, val, labels) {
+  val_idx <- as.integer(val) + 1L          # 0 -> 1, 1 -> 2
+  if (!is.null(labels) && !is.null(labels[[node]]))
+    labels[[node]][val_idx]
+  else
+    .DEFAULT_LABELS[val_idx]
+}
+
+
+#' Build a natural-language label sentence for a probability prompt
+#'
+#' Converts a formal probability query into a plain-English sentence using
+#' user-supplied value labels, falling back to \code{"Low"} / \code{"High"}
+#' for any node without an explicit label entry.
+#'
+#' \itemize{
+#'   \item \strong{Root nodes} (no parents): \emph{"How likely is X to be
+#'     \sQuote{High}?"}
+#'   \item \strong{Endogenous nodes} (one or more parents): \emph{"Suppose
+#'     that Z is \sQuote{High} and X is \sQuote{Low}. In that case, how
+#'     likely is it that Y will be \sQuote{High}?"}
+#' }
+#'
+#' @param node Character. Name of the outcome node.
+#' @param parent_values Named integer vector of parent values (length 0 for
+#'   root nodes).
+#' @param labels Named list; each element is a length-2 character vector
+#'   \code{c(label_for_0, label_for_1)} for that node.  Nodes without an
+#'   entry use the default \code{"Low"} / \code{"High"} labels.
+#' @return A character string (never \code{NULL}).
+#' @keywords internal
+format_label_sentence <- function(node, parent_values, labels) {
+  node_lbl <- .node_val_label(node, 1L, labels)   # label for outcome = 1
+
+  if (length(parent_values) == 0L) {
+    # Root / exogenous node
+    sprintf("How likely is %s to be \"%s\"?", node, node_lbl)
+  } else {
+    # Endogenous node: "Suppose that … . In that case, how likely is it that Y will be '…'?"
+    parent_parts <- vapply(names(parent_values), function(p) {
+      lbl <- .node_val_label(p, parent_values[[p]], labels)
+      sprintf("%s is \"%s\"", p, lbl)
+    }, character(1L))
+    sprintf("Suppose that %s. In that case, how likely is it that %s will be \"%s\"?",
+            paste(parent_parts, collapse = " and "), node, node_lbl)
+  }
+}
+
+
 # ---------------------------------------------------------------------------
 # Input parsing
 # ---------------------------------------------------------------------------
@@ -95,14 +154,19 @@ parse_prob_input <- function(input, mode) {
 #' @param parent_values Named integer vector of parent values (length 0 for
 #'   root nodes)
 #' @param mode Character. "probability" or "likert"
+#' @param labels Optional named list of value labels; each element is a
+#'   length-2 character vector \code{c(label_for_0, label_for_1)}.  When
+#'   supplied, a plain-English sentence is printed beneath the formal query.
 #' @param .response Optional pre-specified response (character or numeric).
 #'   When provided, interactive input is skipped.
 #' @return Numeric probability in [0, 1]
 #' @keywords internal
 prompt_for_prob <- function(node, parent_values,
                             mode      = "probability",
+                            labels    = NULL,
                             .response = NULL) {
-  query_str <- format_query(node, parent_values)
+  query_str  <- format_query(node, parent_values)
+  label_sent <- format_label_sentence(node, parent_values, labels)
 
   # ---- Non-interactive path -----------------------------------------------
   if (!is.null(.response)) {
@@ -126,6 +190,7 @@ prompt_for_prob <- function(node, parent_values,
 
   if (mode == "likert") {
     cat("\n", query_str, "\n", sep = "")
+    if (!is.null(label_sent)) cat("  ", label_sent, "\n", sep = "")
     cat("Rate the probability on a 1-7 scale",
         "(or enter a decimal 0\u20131 directly):\n")
     cat(paste(LIKERT_LABELS, collapse = "\n"), "\n")
@@ -144,11 +209,21 @@ prompt_for_prob <- function(node, parent_values,
 
   } else {
     # probability mode
-    repeat {
-      raw  <- trimws(readline(prompt = sprintf("\n%s = ", query_str)))
-      prob <- parse_prob_input(raw, mode)
-      if (!is.na(prob)) return(prob)
-      cat("  Please enter a decimal between 0 and 1 (e.g., 0.75).\n")
+    if (!is.null(label_sent)) {
+      repeat {
+        cat(sprintf("\n%s = ?\n  %s\n", query_str, label_sent))
+        raw  <- trimws(readline(prompt = "  Enter probability: "))
+        prob <- parse_prob_input(raw, mode)
+        if (!is.na(prob)) return(prob)
+        cat("  Please enter a decimal between 0 and 1 (e.g., 0.75).\n")
+      }
+    } else {
+      repeat {
+        raw  <- trimws(readline(prompt = sprintf("\n%s = ", query_str)))
+        prob <- parse_prob_input(raw, mode)
+        if (!is.na(prob)) return(prob)
+        cat("  Please enter a decimal between 0 and 1 (e.g., 0.75).\n")
+      }
     }
   }
 }

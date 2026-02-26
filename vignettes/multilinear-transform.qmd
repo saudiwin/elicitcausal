@@ -1,0 +1,446 @@
+---
+title: "The Multilinear Probability Transform"
+subtitle: "Encoding Conditional Probability Tables as Polynomial Forms"
+author: "Robert Kubinec"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    highlight-style: github
+    html-math-method: mathjax
+vignette: >
+  %\VignetteIndexEntry{The Multilinear Probability Transform}
+  %\VignetteEngine{quarto::html}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment  = "#>"
+)
+library(elicitcausal)
+library(dagitty)
+```
+
+## Overview
+
+`to_theorytools()` converts an elicited conditional probability table (CPT)
+into a *form* expression for the
+[theorytools](https://cjvanlissa.github.io/theorytools/) augmented DAG format.
+The conversion relies on a mathematical object called the **multilinear
+probability polynomial**, which is the unique polynomial that
+(a) exactly matches every entry of the CPT when the parent variables take
+binary values, and (b) is linear in each parent variable separately.
+
+This vignette derives the transform step by step, works through one- and
+two-parent examples with concrete numbers, and shows how the coefficients
+relate to the structural equation that theorytools uses for simulation and
+estimation.
+
+---
+
+## 1  Setup and notation
+
+Consider a binary child node $Y \in \{0, 1\}$ with $k$ binary parent nodes
+$X_1, X_2, \ldots, X_k \in \{0,1\}$.
+
+A **conditional probability table (CPT)** for $Y$ is a function that assigns
+a probability to every combination of parent values:
+
+$$
+p_{\mathbf{c}} \;=\; P(Y = 1 \mid X_1 = c_1, \ldots, X_k = c_k),
+\qquad \mathbf{c} = (c_1, \ldots, c_k) \in \{0,1\}^k.
+$$
+
+There are $2^k$ such combinations, so the CPT contains $2^k$ numbers, each
+in $[0, 1]$.
+
+---
+
+## 2  The multilinear polynomial
+
+We seek a function $f : \mathbb{R}^k \to \mathbb{R}$ such that
+
+$$
+f(c_1, \ldots, c_k) = p_{\mathbf{c}}
+\qquad \text{for every } \mathbf{c} \in \{0,1\}^k.
+$$
+
+Among all functions satisfying this interpolation condition, we choose the
+one that is **multilinear** — linear (i.e., at most degree-1) in each
+variable $X_i$ separately when all other variables are held fixed.
+
+**Claim.** There is a unique multilinear polynomial satisfying the
+interpolation condition, and it takes the form
+
+$$
+\boxed{f(x_1, \ldots, x_k) \;=\;
+  \sum_{S \subseteq \{1,\ldots,k\}} \alpha_S \prod_{i \in S} x_i,}
+$$
+
+where the sum runs over all $2^k$ subsets $S$ of the parent index set
+(including $S = \emptyset$, whose monomial is the empty product, equal to
+$1$).
+
+*Proof of uniqueness.* The $2^k$ monomials $\prod_{i \in S} x_i$, indexed by
+subsets $S \subseteq \{1,\ldots,k\}$, are linearly independent on
+$\{0,1\}^k$ (the evaluation map at any $\mathbf{c}$ picks out a unique
+lower-triangular system — see Section 3).  Hence the expansion is unique.
+
+*Proof of multilinearity.* Each variable $x_j$ appears at most once in every
+monomial (since $S$ is a set, not a multiset), so $f$ is linear in each
+$x_j$ separately. $\square$
+
+---
+
+## 3  Computing the coefficients: the Möbius transform
+
+### 3.1  Design matrix formulation
+
+Order the $2^k$ binary combinations $\mathbf{c}^{(1)}, \ldots, \mathbf{c}^{(2^k)}$
+using `expand.grid` with the **first parent cycling fastest**:
+
+$$
+\mathbf{c}^{(1)} = (0,0,\ldots,0), \quad
+\mathbf{c}^{(2)} = (1,0,\ldots,0), \quad
+\mathbf{c}^{(3)} = (0,1,\ldots,0), \quad \ldots
+$$
+
+Stack the CPT probabilities into a vector:
+
+$$
+\mathbf{p} = \bigl(p_{\mathbf{c}^{(1)}}, \ldots, p_{\mathbf{c}^{(2^k)}}\bigr)^\top \in [0,1]^{2^k}.
+$$
+
+Order the $2^k$ subsets $S$ correspondingly (also by `model.matrix` with
+the formula `~ X1 * X2 * ... * Xk`) and stack the coefficients:
+
+$$
+\boldsymbol{\alpha} = (\alpha_\emptyset,\, \alpha_{\{1\}},\, \alpha_{\{2\}},\,
+  \alpha_{\{1,2\}},\, \ldots)^\top \in \mathbb{R}^{2^k}.
+$$
+
+The interpolation condition $f(\mathbf{c}^{(i)}) = p_{\mathbf{c}^{(i)}}$
+for all $i$ becomes the linear system
+
+$$
+\mathbf{X}\,\boldsymbol{\alpha} = \mathbf{p},
+$$
+
+where $\mathbf{X} \in \{0,1\}^{2^k \times 2^k}$ is the model matrix with
+
+$$
+X_{i,S} = \prod_{j \in S} c^{(i)}_j.
+$$
+
+### 3.2  The matrix $\mathbf{X}$ is always invertible
+
+For binary predictors, $\mathbf{X}$ is a lower-triangular matrix with 1s on
+the diagonal (the row corresponding to $\mathbf{c} = \mathbf{0}$ has only
+the intercept column nonzero; the rows with more 1s progressively fill in
+more columns).  Its determinant is therefore $1 \neq 0$, so
+
+$$
+\boldsymbol{\alpha} = \mathbf{X}^{-1}\,\mathbf{p}
+$$
+
+always has a unique solution.  The inverse $\mathbf{X}^{-1}$ is the
+**Möbius inversion matrix** for the Boolean lattice.
+
+### 3.3  Closed-form expression
+
+The Möbius inversion gives a closed-form formula for each coefficient:
+
+$$
+\alpha_S \;=\; \sum_{T \subseteq S} (-1)^{|S| - |T|}\, p_T,
+$$
+
+where $p_T$ denotes the CPT entry with parents set to 1 exactly on the
+indices in $T$ (and 0 elsewhere).  The alternating-sign inclusion–exclusion
+structure is the Boolean analog of finite-difference operators.
+
+In `elicitcausal`, the coefficients are computed via `stats::model.matrix`
+and `base::solve`:
+
+```{r coef-computation, eval=FALSE}
+X_design <- stats::model.matrix(
+  stats::as.formula(paste0("~ ", paste(parent_names, collapse = " * "))),
+  data = expand.grid(lapply(parent_names, function(.) c(0L, 1L)),
+                     KEEP.OUT.ATTRS = FALSE)
+)
+alpha <- solve(X_design, cpt_probs)
+```
+
+---
+
+## 4  Single-parent example ($k = 1$)
+
+Let $Y$ have one parent $X$, with
+
+$$
+p_0 = P(Y=1 \mid X=0), \qquad p_1 = P(Y=1 \mid X=1).
+$$
+
+The design matrix and system are
+
+$$
+\underbrace{\begin{pmatrix} 1 & 0 \\ 1 & 1 \end{pmatrix}}_{\mathbf{X}}
+\begin{pmatrix} \alpha_\emptyset \\ \alpha_{\{1\}} \end{pmatrix}
+=
+\begin{pmatrix} p_0 \\ p_1 \end{pmatrix},
+$$
+
+giving
+
+$$
+\alpha_\emptyset = p_0, \qquad \alpha_{\{1\}} = p_1 - p_0.
+$$
+
+The multilinear polynomial is therefore
+
+$$
+f(x) = p_0 + (p_1 - p_0)\,x.
+$$
+
+This is a simple linear interpolation between the two CPT entries.  The
+theorytools `form` on the edge $X \to Y$ is:
+
+$$
+\texttt{form} = \underbrace{p_0}_{\text{intercept}} + \underbrace{(p_1 - p_0)}_{\text{slope}} \cdot X.
+$$
+
+**Concrete example:** $p_0 = 0.2$, $p_1 = 0.8$:
+
+$$
+f(x) = 0.2 + 0.6\,x.
+$$
+
+Verify: $f(0) = 0.2\,\checkmark$, $f(1) = 0.8\,\checkmark$.
+
+```{r single-parent-ex}
+result_xy <- elicit_dag_priors(
+  dagitty("dag { X -> Y }"),
+  verbose    = FALSE,
+  .responses = list(X = list(0.5), Y = list(0.2, 0.8))
+)
+addag_xy <- to_theorytools(result_xy)
+cat(as.character(addag_xy))
+```
+
+---
+
+## 5  Two-parent example ($k = 2$)
+
+Let $Y$ have parents $X_1$ and $X_2$, with CPT entries
+$p_{00}, p_{10}, p_{01}, p_{11}$ (first parent cycles fastest):
+
+$$
+\mathbf{X} =
+\begin{pmatrix}
+1 & 0 & 0 & 0 \\
+1 & 1 & 0 & 0 \\
+1 & 0 & 1 & 0 \\
+1 & 1 & 1 & 1
+\end{pmatrix},
+\qquad
+\mathbf{p} =
+\begin{pmatrix} p_{00} \\ p_{10} \\ p_{01} \\ p_{11} \end{pmatrix}.
+$$
+
+Solving $\mathbf{X}\boldsymbol{\alpha} = \mathbf{p}$:
+
+$$
+\begin{aligned}
+\alpha_\emptyset   &= p_{00}, \\
+\alpha_{\{1\}}     &= p_{10} - p_{00}, \\
+\alpha_{\{2\}}     &= p_{01} - p_{00}, \\
+\alpha_{\{1,2\}}   &= p_{11} - p_{10} - p_{01} + p_{00}.
+\end{aligned}
+$$
+
+The multilinear polynomial is
+
+$$
+f(x_1, x_2)
+  = p_{00}
+  + (p_{10} - p_{00})\,x_1
+  + (p_{01} - p_{00})\,x_2
+  + (p_{11} - p_{10} - p_{01} + p_{00})\,x_1 x_2.
+$$
+
+The coefficient of the interaction term $x_1 x_2$ is the **second-order
+finite difference** of the CPT — it is zero whenever the effect of $X_1$ on
+$Y$ is the same regardless of $X_2$'s value (i.e., when the two parents act
+independently on $Y$).
+
+**Concrete example:** collider $X \to Z \leftarrow Y$ with
+$p_{00} = 0.1$, $p_{10} = 0.4$, $p_{01} = 0.3$, $p_{11} = 0.9$:
+
+$$
+\begin{aligned}
+\alpha_\emptyset  &= 0.1, \\
+\alpha_{\{X\}}   &= 0.3, \\
+\alpha_{\{Y\}}   &= 0.2, \\
+\alpha_{\{X,Y\}} &= 0.9 - 0.4 - 0.3 + 0.1 = 0.3.
+\end{aligned}
+$$
+
+$$
+f(x, y) = 0.1 + 0.3\,x + 0.2\,y + 0.3\,xy.
+$$
+
+```{r two-parent-ex}
+result_xzy <- elicit_dag_priors(
+  dagitty("dag { X -> Z; Y -> Z }"),
+  verbose    = FALSE,
+  .responses = list(X = list(0.5), Y = list(0.5),
+                    Z = list(0.1, 0.4, 0.3, 0.9))
+)
+addag_xzy <- to_theorytools(result_xzy)
+cat(as.character(addag_xzy))
+```
+
+We can verify all four CPT entries by evaluating the combined edge forms:
+
+```{r two-parent-verify}
+# Substitute : -> * so R evaluates interaction as multiplication
+form_eval <- function(s, ...) eval(parse(text = gsub(":", "*", s)), list(...))
+
+dag_str <- as.character(addag_xzy)
+
+get_form <- function(pattern, text) {
+  m <- regmatches(text, regexpr(pattern, text))
+  sub(pattern, "\\1", m)
+}
+
+form_X <- get_form('X -> Z \\[form="([^"]+)"\\]', dag_str)
+form_Y <- get_form('Y -> Z \\[form="([^"]+)"\\]', dag_str)
+
+combos <- expand.grid(X = 0:1, Y = 0:1)
+combos$prob <- mapply(
+  function(x, y) form_eval(form_X, X = x, Y = y) + form_eval(form_Y, X = x, Y = y),
+  combos$X, combos$Y
+)
+combos
+```
+
+---
+
+## 6  Edge attribution rule
+
+The theorytools format attaches a `form` to each **directed edge**, not to
+the child node as a whole.  When a child has multiple parents, the
+$2^k$ monomials of the polynomial must be distributed across the $k$
+incoming edges.
+
+`to_theorytools()` uses the following rule:
+
+> **Each monomial $\alpha_S \prod_{i \in S} x_i$ is attributed to the edge
+> of the parent with the smallest index in $S$.  The constant term
+> $\alpha_\emptyset$ is attributed to the first parent's edge.**
+
+Concretely, for $k = 2$ parents $X_1, X_2$:
+
+| Monomial | Attributed to edge |
+|---|---|
+| $\alpha_\emptyset$ (constant) | $X_1 \to Y$ |
+| $\alpha_{\{1\}} x_1$ | $X_1 \to Y$ |
+| $\alpha_{\{2\}} x_2$ | $X_2 \to Y$ |
+| $\alpha_{\{1,2\}} x_1 x_2$ | $X_1 \to Y$ (min index is 1) |
+
+The two edge forms therefore are:
+
+$$
+\begin{aligned}
+\text{form}(X_1 \to Y) &= \alpha_\emptyset + \alpha_{\{1\}}\,X_1 + \alpha_{\{1,2\}}\,X_1{:}X_2, \\
+\text{form}(X_2 \to Y) &= \alpha_{\{2\}}\,X_2.
+\end{aligned}
+$$
+
+Summing them recovers $f(x_1, x_2)$ exactly.  The rule ensures that every
+monomial appears on exactly one edge: the edge of the parent most responsible
+for "introducing" the term.
+
+---
+
+## 7  Relationship to logistic regression
+
+The multilinear polynomial lives in **probability space** (the output of $f$
+is directly $P(Y=1|\ldots)$), not in log-odds space.  The standard logistic
+regression model uses a logit link:
+
+$$
+\log\frac{P(Y=1|\mathbf{x})}{1-P(Y=1|\mathbf{x})} = \beta_0 + \sum_i \beta_i x_i + \sum_{i<j} \beta_{ij} x_i x_j + \cdots
+$$
+
+The logistic-regression coefficients $\boldsymbol{\beta}$ are **not** the
+same as the multilinear coefficients $\boldsymbol{\alpha}$, but both
+parameterize the same CPT exactly (since for binary predictors, a saturated
+logistic model also has $2^k$ free parameters).
+
+The multilinear formulation has two practical advantages over the logistic
+one for this application:
+
+1. **Direct simulation.** Because $f(\mathbf{x}) \in [0,1]$ for all
+   $\mathbf{x} \in [0,1]^k$, theorytools' `simulate_data()` can draw
+   $$Y \sim \text{Bernoulli}(f(x_1, \ldots, x_k))$$
+   directly without a link-function transformation.
+
+2. **Closed form.** The coefficients $\boldsymbol{\alpha}$ are obtained by a
+   single matrix solve with an integer matrix (no iterative optimization
+   required), and the solution is always exact.
+
+For **statistical estimation** from observed data, a logistic regression
+(binomial family, logit link) is generally preferred for numerical stability:
+
+```r
+glm(Y ~ X1 * X2, data = df, family = binomial)
+```
+
+The identity-link binomial model matches the multilinear polynomial exactly:
+
+```r
+glm(Y ~ X1 * X2, data = df, family = binomial(link = "identity"))
+```
+
+though the identity-link solver can be numerically unstable when predicted
+probabilities approach 0 or 1.
+
+---
+
+## 8  General $k$-parent formula
+
+For completeness, the general coefficient formula via Möbius inversion is:
+
+$$
+\alpha_S = \sum_{T \subseteq S} (-1)^{|S|-|T|}\, p_T,
+$$
+
+where $p_T = P(Y=1 \mid X_i = \mathbf{1}[i \in T])$ is the CPT entry with
+parents in $T$ set to 1 and all others set to 0.
+
+**Special cases:**
+
+- $|S| = 0$: $\alpha_\emptyset = p_\emptyset = p_{00\cdots0}$ (baseline probability).
+- $|S| = 1$, $S = \{j\}$: $\alpha_{\{j\}} = p_{\{j\}} - p_\emptyset$ (marginal increment from $X_j$).
+- $|S| = 2$, $S = \{i,j\}$: $\alpha_{\{i,j\}} = p_{\{i,j\}} - p_{\{i\}} - p_{\{j\}} + p_\emptyset$ (interaction).
+
+The interaction coefficient $\alpha_{\{i,j\}}$ is zero when the causal effects
+of $X_i$ and $X_j$ on $Y$ are **additive on the probability scale** — i.e.,
+when $P(Y=1|X_i=1,X_j=1) = P(Y=1|X_i=1,X_j=0) + P(Y=1|X_i=0,X_j=1) - P(Y=1|X_i=0,X_j=0)$.
+
+---
+
+## 9  Summary
+
+| Quantity | Symbol | Meaning |
+|---|---|---|
+| CPT entry | $p_\mathbf{c}$ | $P(Y=1 \mid \text{parents} = \mathbf{c})$, elicited from user |
+| Multilinear polynomial | $f(x_1,\ldots,x_k)$ | Unique interpolant; equals $p_\mathbf{c}$ at every binary input |
+| Möbius coefficient | $\alpha_S$ | Coefficient of monomial $\prod_{i\in S} x_i$ |
+| Design matrix | $\mathbf{X}$ | `model.matrix(~X1*...*Xk)` at binary combinations |
+| Linear system | $\mathbf{X}\boldsymbol{\alpha} = \mathbf{p}$ | Solved exactly; $\mathbf{X}$ is always invertible |
+| theorytools `distribution` | `rbinom(size=1)` | Signals binary Bernoulli response family |
+| theorytools `form` | $f$ split across edges | Each edge carries the monomials of its lowest-indexed parent |

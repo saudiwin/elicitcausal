@@ -153,7 +153,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
     shiny::tabPanel(
       "Causal Graph Post-Study",
       value = "tab_post",
-      .elicit_ui("post", dag_str, mode)
+      .elicit_ui("post", dag_str, mode, locked_dag = TRUE)
     ),
 
     # ------------------------------------------------------------------
@@ -176,14 +176,23 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
     style = "padding: 20px 10px;",
 
     shiny::h2("How to Use elicitcausal", style = "margin-top: 0; color: #2c3e50;"),
-    shiny::HTML(
+    shiny::p(
     "This app helps you construct a causal graph along with priors for the relationships between variables
-    in the causal graph. Constructing a causal graph before doing a study can help you understand how much 
-    causal learning you can gain from a variety of interventions. You can also compare the pre-study graph to a post-study graph
-    to gain very precise measures of causal learning after doing a study. 
-    For more information about this method, see 
+    in the causal graph. It is designed for non-experts by using a question-and-answer format to 
+    populate the causal graph with the researcher's knowledge about the research question. Constructing a causal graph before doing a study can help you understand how much 
+    causal learning you can gain from a variety of interventions--especially if you preregister the pre-study causal graph. You can then compare the pre-study graph to a post-study graph
+    to gain very precise measures of causal learning after doing a study (using entropy as a metric). Of course, the
+    causal graphs are useful for many other kinds of analyses, such as diagnosing issues in research design and meta-analysis."), 
+    shiny::HTML("To facilitate inserting the pre-study graph into a preregistration, this app provides options for downloading Latex/Markdown/Word version of the causal graph as a 
+    table with associated priors on relationships between nodes. Alternatively, you can download an R object from this package or other packages
+    that help you analyze causal graphs--<a href='https://integrated-inferences.github.io/CausalQueries/' target='_blank' rel='noopener noreferrer'>CausalQueries</a> and <a href='https://cjvanlissa.github.io/theorytools/' target='_blank' rel='noopener noreferrer'>theorytools</a>.
+    The theorytools package has specific support for <a href='https://cjvanlissa.github.io/theorytools/articles/fair-theory.html' target='_blank' rel='noopener noreferrer'>creating files suitable for preregistration using FAIR principles</a>."),
+    shiny::HTML("<br><br>After performing the study, you can re-upload the pre-study causal graph--either from the Latex/Markdown/Word file or as a elicitcausal/CausalQueries/theorytools R object--
+      and then update the graph with what you learned from the study. The app will calculate the post-study learning using entropy metrics as described in the paper below."),
+    shiny::HTML("
+    <br><br>This app was developed by <a href='https://www.robertkubinec.com' target='_blank' rel='noopener noreferrer'>Robert Kubinec</a> at the University of South Carolina. For more information about this method, see 
     <a href='https://doi.org/10.31235/osf.io/a492b' target='_blank' rel='noopener noreferrer'>
-    the paper here</a>."
+    the related paper 'Holistic Causal Learning with Causal Graphs: A Credible Method for Study Design and Preregistration in the Social Sciences'</a>."
   ),
 
     shiny::h3("Workflow"),
@@ -238,8 +247,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 
     shiny::h3("Entropy interpretation"),
     shiny::tags$ul(
-      shiny::tags$li(shiny::strong("H = 0 bits"), " \u2014 complete certainty (probability 0 or 1 for all states)."),
-      shiny::tags$li(shiny::strong("H = n bits"), " \u2014 maximum uncertainty over 2\u207F states (all equally likely)."),
+      shiny::tags$li(shiny::strong("H = 0%"), " \u2014 complete certainty (probability 0 or 1 for all states)."),
+      shiny::tags$li(shiny::strong("H = n \u00d7 69.66%"), " \u2014 maximum uncertainty over 2\u207F states (all equally likely); equals n \u00d7 log\u2081.\u2080\u2081(2) for n binary nodes."),
       shiny::tags$li(shiny::strong("\u0394H < 0"), " (post \u2212 pre) \u2014 beliefs became more precise after the study."),
       shiny::tags$li(shiny::strong("\u0394H > 0"), " \u2014 beliefs became more uncertain; the study introduced new complexity.")
     )
@@ -256,7 +265,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 #' @param dag_str Initial DAG specification string.
 #' @param mode Initial elicitation mode.
 #' @keywords internal
-.elicit_ui <- function(id, dag_str, mode) {
+.elicit_ui <- function(id, dag_str, mode, locked_dag = FALSE) {
   ns <- shiny::NS(id)
   shiny::fluidRow(
     style = "padding: 14px 0;",
@@ -267,34 +276,88 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
         shiny::h4("Causal Graph", style = "margin-top:0"),
         shiny::plotOutput(ns("dag_plot"), height = "300px"),
         shiny::div(
-          style = "margin-top: 6px; font-size: 0.8em; color: #555;",
-          shiny::span(class = "legend-dot", style = "color:#27ae60;", "\u25cf"),
-          " Elicited  ",
-          shiny::span(class = "legend-dot", style = "color:#e67e22;", "\u25cf"),
-          " Active  ",
-          shiny::span(class = "legend-dot", style = "color:#bdc3c7;", "\u25cf"),
-          " Pending"
+          style = "display:flex; justify-content:space-between; align-items:center; margin-top:6px;",
+          shiny::div(
+            style = "font-size: 0.8em; color: #555;",
+            shiny::span(class = "legend-dot", style = "color:#27ae60;", "\u25cf"),
+            " Elicited  ",
+            shiny::span(class = "legend-dot", style = "color:#e67e22;", "\u25cf"),
+            " Active  ",
+            shiny::span(class = "legend-dot", style = "color:#bdc3c7;", "\u25cf"),
+            " Pending"
+          ),
+          shiny::selectInput(
+            ns("dag_layout"), label = NULL, width = "130px",
+            selected = "circle",
+            choices = c(
+              "Circle"      = "circle",
+              "Linear"      = "linear",
+              "Matrix"      = "matrix",
+              "Treemap"     = "treemap",
+              "Circle pack" = "circlepack",
+              "Partition"   = "partition",
+              "Cactus tree" = "cactustree",
+              "Eigen"       = "eigen",
+              "Fabric"      = "fabric",
+              "Stress"      = "stress",
+              "Unrooted"    = "unrooted",
+              "H-tree"      = "htree"
+            )
+          )
         ),
         shiny::hr(style = "margin: 10px 0;"),
-        shiny::tags$label(
-          `for` = ns("dag_text"),
-          style = "font-weight:600; font-size:0.9em; margin-bottom:3px; display:block;",
-          "DAG specification"
-        ),
-        shiny::div(
-          class = "dag-textarea",
-          shiny::textAreaInput(ns("dag_text"), label = NULL, value = dag_str,
-                               rows = 3L, width = "100%",
-                               placeholder = "dag { X -> Y -> Z }")
-        ),
-        shiny::uiOutput(ns("dag_text_status")),
-        shiny::div(
-          class = "dag-hint",
-          "Build your DAG visually at ",
-          shiny::tags$a("dagitty.net", href = "https://dagitty.net", target = "_blank"),
-          ", then copy the model code (Model \u2192 Export \u2192 dagitty code)",
-          " and paste it above. The graph updates automatically."
-        )
+        if (locked_dag) {
+          shiny::tagList(
+            # Upload card (post tab only)
+            shiny::div(
+              style = "background:#f0f4f8; border:1px solid #c8d6e5; border-radius:5px; padding:10px 12px; margin-bottom:10px;",
+              shiny::div(
+                style = "font-size:0.88em; font-weight:600; color:#2c3e50; margin-bottom:4px;",
+                shiny::icon("upload"), " Upload pre-study file (optional)"
+              ),
+              shiny::div(
+                style = "font-size:0.79em; color:#7f8c8d; margin-bottom:6px; line-height:1.4;",
+                "Accepts: .rds (elicitcausal / CausalQueries / theorytools), .csv, .qmd"
+              ),
+              shiny::fileInput(ns("upload_prior"), label = NULL,
+                               accept = c(".rds", ".csv", ".qmd", ".md"),
+                               buttonLabel = "Browse...",
+                               placeholder = "No file selected",
+                               width = "100%"),
+              shiny::uiOutput(ns("upload_status"))
+            ),
+            # Lock notice
+            shiny::div(
+              style = "font-size:0.82em; color:#7f8c8d; margin-bottom:6px;",
+              shiny::icon("lock"), " ",
+              "The causal graph is fixed to the Pre-Study graph. ",
+              "Only probabilities can be changed here."
+            ),
+            shiny::uiOutput(ns("dag_locked_display"))
+          )
+        } else {
+          shiny::tagList(
+            shiny::tags$label(
+              `for` = ns("dag_text"),
+              style = "font-weight:600; font-size:0.9em; margin-bottom:3px; display:block;",
+              "DAG specification"
+            ),
+            shiny::div(
+              class = "dag-textarea",
+              shiny::textAreaInput(ns("dag_text"), label = NULL, value = dag_str,
+                                   rows = 3L, width = "100%",
+                                   placeholder = "dag { X -> Y -> Z }")
+            ),
+            shiny::uiOutput(ns("dag_text_status")),
+            shiny::div(
+              class = "dag-hint",
+              "Build your DAG visually at ",
+              shiny::tags$a("dagitty.net", href = "https://dagitty.net", target = "_blank"),
+              ", then copy the model code (Model \u2192 Export \u2192 dagitty code)",
+              " and paste it above. The graph updates automatically."
+            )
+          )
+        }
       )
     ),
 
@@ -311,6 +374,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
                               selected = mode, inline = TRUE)
         ),
         shiny::hr(style = "margin: 8px 0;"),
+        shiny::uiOutput(ns("label_table")),
         shiny::div(
           style = "display:flex; align-items:center; flex-wrap:wrap; gap:10px;",
           shiny::actionButton(ns("btn_elicit"), "Elicit Probabilities",
@@ -335,6 +399,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
     style = "padding: 20px 10px; max-width: 960px; margin: 0 auto;",
     shiny::uiOutput("learning_display"),
     shiny::plotOutput("learning_plot", height = "320px"),
+    shiny::uiOutput("learning_download_ui"),
     shiny::uiOutput("btn_close_global_ui")
   )
 }
@@ -347,9 +412,16 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 .app_server <- function(dag, dag_info, mode, hide_close = FALSE) {
   function(input, output, session) {
 
-    # Instantiate the two elicitation modules; each returns reactive(rv$result)
-    pre_r  <- .elicit_server("pre",  dag, dag_info, mode)
-    post_r <- .elicit_server("post", dag, dag_info, mode)
+    # Shared reactive state: the post tab writes an uploaded pre-study result
+    # here so the pre tab can read it and update itself for entropy comparison.
+    rv_shared <- shiny::reactiveValues(imported_pre = NULL)
+
+    # Instantiate the two elicitation modules; each returns reactive(rv$result).
+    # The post module starts with no DAG and syncs from pre_r when pre completes.
+    pre_r  <- .elicit_server("pre",  dag, dag_info, mode,
+                              uploaded_override_rv = rv_shared)
+    post_r <- .elicit_server("post", NULL, NULL, mode, pre_result_r = pre_r,
+                              uploaded_override_rv = rv_shared)
 
     # ------------------------------------------------------------------
     # Tab 4: Causal Learning summary
@@ -399,13 +471,16 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
         col <- if (dh < -1e-6) "#27ae60" else if (dh > 1e-6) "#e74c3c" else "#555"
         lbl <- if (dh < -1e-6) "\u2193 less uncertain" else
                if (dh > 1e-6) "\u2191 more uncertain" else "\u2015 no change"
+        ltype <- if (abs(dh) < 1) "No Learning" else
+                 if (dh < 0)      "Type I"       else "Type II"
         shiny::tags$tr(
           shiny::tags$td(shiny::strong(nd)),
           shiny::tags$td(sprintf("%.4f", pre$node_entropies[nd])),
           shiny::tags$td(sprintf("%.4f", post$node_entropies[nd])),
           shiny::tags$td(style = sprintf("color:%s; font-weight:600;", col),
                          sprintf("%+.4f", dh)),
-          shiny::tags$td(style = sprintf("color:%s;", col), lbl)
+          shiny::tags$td(style = sprintf("color:%s;", col), lbl),
+          shiny::tags$td(shiny::strong(ltype))
         )
       })
 
@@ -413,8 +488,9 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
         class = "table table-striped table-bordered table-condensed",
         style = "font-size:0.9em;",
         shiny::tags$thead(shiny::tags$tr(
-          lapply(c("Node", "Pre entropy (bits)", "Post entropy (bits)",
-                   "\u0394 entropy", "Direction"), shiny::tags$th)
+          lapply(c("Node", "Pre entropy (%)", "Post entropy (%)",
+                   "\u0394 entropy (%)", "Direction", "Learning Type"),
+                 shiny::tags$th)
         )),
         shiny::tags$tbody(rows)
       )
@@ -434,7 +510,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
           class = "entropy-note",
           style = "font-size:0.95em; margin-bottom:14px;",
           shiny::strong("Overall joint entropy: "),
-          sprintf("Pre = %.4f bits, Post = %.4f bits, \u0394H = %+.4f bits (%s)",
+          sprintf("Pre = %.2f%%, Post = %.2f%%, \u0394H = %+.2f%% (%s)",
                   pre_H, post_H, dH, pct_str),
           shiny::br(),
           if (dH < -1e-6)
@@ -480,7 +556,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
           drop = FALSE
         ) +
         ggplot2::labs(
-          x = "\u0394 entropy (bits, post \u2212 pre)",
+          x = "\u0394 entropy (%, post \u2212 pre)",
           y = NULL,
           title = "Change in node-level entropy",
           fill  = NULL
@@ -492,6 +568,53 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
           panel.grid.major.y = ggplot2::element_blank()
         )
     }, bg = "white")
+
+    # ------------------------------------------------------------------
+    # Learning tab: download entropy comparison table
+    # ------------------------------------------------------------------
+    output$learning_download_ui <- shiny::renderUI({
+      pre  <- pre_r()
+      post <- post_r()
+      if (is.null(pre) || is.null(post)) return(NULL)
+      shiny::div(
+        class = "dl-section",
+        style = "margin-top:14px; padding-top:10px; border-top:1px solid #dee2e6;",
+        shiny::strong(style = "font-size:0.9em;", "Download entropy comparison table:"),
+        shiny::br(),
+        shiny::div(
+          style = "display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap;",
+          shiny::selectInput("learning_dl_format", label = NULL, width = "180px",
+            choices = c(
+              "R data frame (.rds)" = "rds",
+              "CSV (.csv)"          = "csv",
+              "Markdown (.md)"      = "md",
+              "LaTeX (.tex)"        = "tex"
+            )
+          ),
+          shiny::downloadButton("download_learning", "Download Table",
+                                class = "btn-default btn-sm",
+                                icon  = shiny::icon("table"))
+        )
+      )
+    })
+
+    output$download_learning <- shiny::downloadHandler(
+      filename = function() {
+        fmt <- shiny::isolate(input$learning_dl_format) %||% "rds"
+        ext <- switch(fmt, rds = ".rds", csv = ".csv", md = ".md", tex = ".tex")
+        paste0("entropy_comparison_", format(Sys.time(), "%Y%m%d_%H%M%S"), ext)
+      },
+      content = function(file) {
+        df  <- .build_learning_df(pre_r(), post_r())
+        fmt <- shiny::isolate(input$learning_dl_format) %||% "rds"
+        switch(fmt,
+          rds = saveRDS(df, file),
+          csv = utils::write.csv(df, file, row.names = FALSE),
+          md  = writeLines(knitr::kable(df, format = "markdown", digits = 2), file),
+          tex = writeLines(knitr::kable(df, format = "latex",    digits = 2), file)
+        )
+      }
+    )
 
     # ------------------------------------------------------------------
     # Global "Close & Return to R" button in tab 4
@@ -533,8 +656,11 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 #' @return A \code{reactive} that yields \code{rv$result} (an
 #'   \code{elicit_dag_result} or \code{NULL}).
 #' @keywords internal
-.elicit_server <- function(id, dag, dag_info, mode) {
+.elicit_server <- function(id, dag, dag_info, mode, pre_result_r = NULL,
+                            uploaded_override_rv = NULL) {
   shiny::moduleServer(id, function(input, output, session) {
+
+    ns <- session$ns   # needed for dynamically generated IDs in renderUI
 
     # ------------------------------------------------------------------
     # Reactive mode
@@ -562,43 +688,227 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       result          = NULL,
       modal_probs     = NULL,
       n_active_combos = 0L,
-      dag_error       = NULL
+      dag_error       = NULL,
+      uploaded_pre    = NULL
     )
 
     # ------------------------------------------------------------------
-    # DAG text observer
+    # Upload observer (post tab only — input$upload_prior is NULL in pre)
     # ------------------------------------------------------------------
-    dag_text_d <- shiny::debounce(shiny::reactive(input$dag_text), 600)
-
-    shiny::observeEvent(dag_text_d(), {
-      txt <- trimws(dag_text_d())
-      if (nchar(txt) == 0L) {
-        dag_rv(NULL); dag_info_rv(NULL)
-        rv$dag_error <- NULL
-        rv$pending <- NULL; rv$cpts <- NULL; rv$result <- NULL
-        return()
-      }
+    shiny::observeEvent(input$upload_prior, {
+      req_file <- input$upload_prior
+      if (is.null(req_file)) return()
       tryCatch({
-        new_dag      <- dagitty::dagitty(txt)
-        new_dag_info <- parse_dag(new_dag)
-        dag_rv(new_dag); dag_info_rv(new_dag_info)
-        rv$dag_error   <- NULL
-        rv$pending     <- NULL; rv$cpts <- NULL; rv$result <- NULL
-        rv$current_idx <- 1L
-      }, error = function(e) rv$dag_error <- conditionMessage(e))
-    }, ignoreInit = TRUE, ignoreNULL = FALSE)
-
-    output$dag_text_status <- shiny::renderUI({
-      if (!is.null(rv$dag_error))
-        shiny::div(style="font-size:0.78em;color:#c0392b;margin-top:3px;",
-                   shiny::icon("times-circle"), " ", rv$dag_error)
-      else {
-        n <- n_nodes_r(); if (n == 0L) return(NULL)
-        shiny::div(style="font-size:0.78em;color:#27ae60;margin-top:3px;",
-                   shiny::icon("check-circle"),
-                   sprintf(" %d node%s detected", n, if (n==1L) "" else "s"))
-      }
+        imported        <- import_elicit_result(req_file$datapath)
+        rv$uploaded_pre <- imported
+        # Propagate to the pre-study tab so entropy comparison works
+        if (!is.null(uploaded_override_rv))
+          uploaded_override_rv$imported_pre <- imported
+      }, error = function(e) {
+        shiny::showNotification(
+          paste("Import failed:", conditionMessage(e)),
+          type = "error", duration = 8
+        )
+      })
     })
+
+    # Upload status badge
+    output$upload_status <- shiny::renderUI({
+      if (is.null(rv$uploaded_pre)) return(NULL)
+      n <- length(rv$uploaded_pre$dag_info$nodes)
+      shiny::div(
+        style = "font-size:0.78em; color:#1e8449; margin-top:-8px;",
+        shiny::icon("check-circle"),
+        sprintf(" Pre-study priors loaded (%d node%s)", n, if(n==1L) "" else "s")
+      )
+    })
+
+    # Effective pre result: uploaded file takes priority over live Pre tab
+    effective_pre_r <- shiny::reactive({
+      if (!is.null(rv$uploaded_pre)) return(rv$uploaded_pre)
+      if (!is.null(pre_result_r))    return(pre_result_r())
+      NULL
+    })
+
+    # ------------------------------------------------------------------
+    # Label table: render inputs + collect current values
+    # ------------------------------------------------------------------
+    output$label_table <- shiny::renderUI({
+
+      nodes <- nodes_r()
+      if (length(nodes) == 0L) return(NULL)
+      shiny::tagList(
+        shiny::div(
+          style = "margin-bottom: 6px;",
+          shiny::strong("Value labels", style = "font-size:0.9em;"),
+          shiny::span(
+            " \u2014 optional: name the 0 and 1 values of each node",
+            style = "font-size:0.8em; color:#777;"
+          )
+        ),
+        shiny::tags$table(
+          class = "table table-condensed",
+          style = "font-size:0.85em; margin-bottom:6px;",
+          shiny::tags$thead(shiny::tags$tr(
+            shiny::tags$th("Node", style = "width:20%;"),
+            shiny::tags$th("Label for 0", style = "width:40%;"),
+            shiny::tags$th("Label for 1", style = "width:40%;")
+          )),
+          shiny::tags$tbody(
+            lapply(nodes, function(nd) {
+
+              shiny::tags$tr(
+                shiny::tags$td(shiny::strong(nd)),
+                shiny::tags$td(shiny::textInput(
+                  shiny::NS(id)(paste0("label_", nd, "_0")), label = NULL,
+                  value = "Low", placeholder = "e.g. absent / no / 0",
+                  width = "100%"
+                )),
+                shiny::tags$td(shiny::textInput(
+                  shiny::NS(id)(paste0("label_", nd, "_1")), label = NULL,
+                  value = "High", placeholder = "e.g. present / yes / 1",
+                  width = "100%"
+                ))
+              )
+            })
+          )
+        ),
+        shiny::hr(style = "margin: 8px 0;")
+      )
+    })
+
+    # Collect current label values from the text inputs
+    labels_r <- shiny::reactive({
+      nodes <- nodes_r()
+      if (length(nodes) == 0L) return(NULL)
+      result <- vector("list", length(nodes))
+      names(result) <- nodes
+      for (nd in nodes) {
+        lbl0 <- trimws(input[[paste0("label_", nd, "_0")]] %||% "")
+        lbl1 <- trimws(input[[paste0("label_", nd, "_1")]] %||% "")
+        if (nchar(lbl0) > 0L || nchar(lbl1) > 0L) {
+          if (nchar(lbl0) == 0L) lbl0 <- "0"
+          if (nchar(lbl1) == 0L) lbl1 <- "1"
+          result[[nd]] <- c(lbl0, lbl1)
+        }
+      }
+      result <- Filter(Negate(is.null), result)
+      if (length(result) == 0L) NULL else result
+    })
+
+    # ------------------------------------------------------------------
+    # DAG observer: text editor (pre/unlocked) or sync from pre (post/locked)
+    # ------------------------------------------------------------------
+    if (is.null(pre_result_r)) {
+      # Editable DAG: watch the text area
+      dag_text_d <- shiny::debounce(shiny::reactive(input$dag_text), 600)
+
+      shiny::observeEvent(dag_text_d(), {
+        txt <- trimws(dag_text_d())
+        if (nchar(txt) == 0L) {
+          dag_rv(NULL); dag_info_rv(NULL)
+          rv$dag_error <- NULL
+          rv$pending <- NULL; rv$cpts <- NULL; rv$result <- NULL
+          return()
+        }
+        tryCatch({
+          new_dag      <- dagitty::dagitty(txt)
+          new_dag_info <- parse_dag(new_dag)
+          # Only reset elicitation state when the DAG structure actually changes.
+          # This prevents an updateTextAreaInput() call (from the upload override)
+          # from wiping the freshly loaded CPTs after the debounce delay.
+          current_dag <- shiny::isolate(dag_rv())
+          dag_changed <- is.null(current_dag) ||
+                         !identical(as.character(new_dag), as.character(current_dag))
+          dag_rv(new_dag); dag_info_rv(new_dag_info)
+          rv$dag_error <- NULL
+          if (dag_changed) {
+            rv$pending     <- NULL; rv$cpts <- NULL; rv$result <- NULL
+            rv$current_idx <- 1L
+          }
+        }, error = function(e) rv$dag_error <- conditionMessage(e))
+      }, ignoreInit = TRUE, ignoreNULL = FALSE)
+
+      output$dag_text_status <- shiny::renderUI({
+        if (!is.null(rv$dag_error))
+          shiny::div(style = "font-size:0.78em;color:#c0392b;margin-top:3px;",
+                     shiny::icon("times-circle"), " ", rv$dag_error)
+        else {
+          n <- n_nodes_r(); if (n == 0L) return(NULL)
+          shiny::div(style = "font-size:0.78em;color:#27ae60;margin-top:3px;",
+                     shiny::icon("check-circle"),
+                     sprintf(" %d node%s detected", n, if (n == 1L) "" else "s"))
+        }
+      })
+
+      # When a file is uploaded in the Post tab, populate the Pre tab with those
+      # values so the Learning tab can compute a meaningful entropy difference.
+      if (!is.null(uploaded_override_rv)) {
+        shiny::observeEvent(uploaded_override_rv$imported_pre, {
+          imp <- uploaded_override_rv$imported_pre
+          if (is.null(imp)) return()
+          dag_rv(imp$dag)
+          dag_info_rv(imp$dag_info)
+          # Update the textarea so the displayed DAG matches; the debounce observer
+          # will fire but will see dag_unchanged = TRUE and skip the state reset.
+          shiny::updateTextAreaInput(session, "dag_text",
+                                     value = as.character(imp$dag))
+          nodes_imp <- imp$dag_info$order
+          rv$pending <- stats::setNames(
+            lapply(nodes_imp, function(nd) as.list(imp$cpts[[nd]]$prob)),
+            nodes_imp
+          )
+          rv$cpts        <- imp$cpts
+          rv$result      <- imp
+          rv$dag_error   <- NULL
+          rv$current_idx <- 1L
+          shiny::showNotification(
+            paste0("Pre-study file loaded into Pre-Study tab (",
+                   length(nodes_imp), " node",
+                   if (length(nodes_imp) == 1L) "" else "s", ")."),
+            type = "message", duration = 5
+          )
+        }, ignoreNULL = TRUE)
+      }
+
+    } else {
+      # Locked DAG: sync structure and probabilities from effective pre result
+      shiny::observeEvent(effective_pre_r(), {
+        pre <- effective_pre_r()
+        if (is.null(pre)) {
+          dag_rv(NULL); dag_info_rv(NULL)
+          rv$pending <- NULL; rv$cpts <- NULL; rv$result <- NULL
+          return()
+        }
+        dag_rv(pre$dag)
+        dag_info_rv(pre$dag_info)
+        # Seed probabilities from the pre-study CPTs
+        nodes_pre <- pre$dag_info$order
+        rv$pending <- stats::setNames(
+          lapply(nodes_pre, function(nd) as.list(pre$cpts[[nd]]$prob)),
+          nodes_pre
+        )
+        rv$cpts   <- NULL
+        rv$result <- NULL
+      }, ignoreNULL = FALSE)
+
+      # Show the current locked DAG string (or a placeholder)
+      output$dag_locked_display <- shiny::renderUI({
+        d <- dag_rv()
+        if (is.null(d)) {
+          shiny::p(
+            style = "font-size:0.85em; color:#999; font-style:italic; margin:4px 0;",
+            "Complete the Pre-Study tab to set the graph."
+          )
+        } else {
+          shiny::pre(
+            style = "font-size:0.75em; background:#f8f8f8; border:1px solid #ddd;
+                     padding:8px; border-radius:4px; white-space:pre-wrap; margin:0;",
+            as.character(d)
+          )
+        }
+      })
+    }
 
     # ------------------------------------------------------------------
     # Initialise pending when DAG changes
@@ -686,7 +996,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       active   <- if (is.null(rv$result) && !is.null(rv$pending) &&
                       rv$current_idx >= 1L && rv$current_idx <= n)
                     nodes[rv$current_idx] else character(0)
-      .draw_dag(d, di, elicited = elicited, active = active)
+      .draw_dag(d, di, elicited = elicited, active = active,
+                layout = input$dag_layout %||% "circle")
     }, bg = "white")
 
     # ------------------------------------------------------------------
@@ -722,27 +1033,70 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       content  = function(file) {
         d <- shiny::isolate(dag_rv()); di <- shiny::isolate(dag_info_rv())
         elicited <- if (!is.null(rv$cpts)) names(rv$cpts) else character(0)
-        p <- .draw_dag(d, di, elicited = elicited)
+        p <- .draw_dag(d, di, elicited = elicited,
+                       layout = shiny::isolate(input$dag_layout) %||% "circle")
         grDevices::jpeg(file, width=1200, height=900, res=150, quality=95)
         print(p)
         grDevices::dev.off()
       }
     )
 
+    output$download_tt <- shiny::downloadHandler(
+      filename = function() paste0("theorytools_", format(Sys.time(),"%Y%m%d_%H%M%S"), ".rds"),
+      content  = function(file) saveRDS(to_theorytools(rv$result), file)
+    )
+    output$download_doc <- shiny::downloadHandler(
+      filename = function() {
+        fmt <- shiny::isolate(input$doc_format) %||% "qmd_bundle"
+        ext <- switch(fmt, html = ".html", gfm = ".md", docx = ".docx", ".zip")
+        paste0("preregistration_", format(Sys.time(),"%Y%m%d_%H%M%S"), ext)
+      },
+      content = function(file) {
+        fmt <- shiny::isolate(input$doc_format) %||% "qmd_bundle"
+        export_priors_qmd(rv$result, file, output_format = fmt)
+      }
+    )
+
     output$download_buttons <- shiny::renderUI({
       shiny::req(rv$result)
-      has_cq <- requireNamespace("CausalQueries", quietly = TRUE)
+      has_cq     <- requireNamespace("CausalQueries", quietly = TRUE)
+      has_tt     <- requireNamespace("theorytools",   quietly = TRUE)
+      has_quarto <- requireNamespace("quarto",        quietly = TRUE)
+
+      doc_choices <- c("Quarto + CSV (.zip)" = "qmd_bundle")
+      if (has_quarto) {
+        doc_choices <- c(doc_choices,
+                         "HTML"           = "html",
+                         "Markdown (.md)" = "gfm",
+                         "Word (.docx)"   = "docx")
+      }
+
       shiny::div(
         class = "dl-section",
-        shiny::strong(style="font-size:0.9em;", "Download results:"),
+        shiny::strong(style="font-size:0.9em;", "Download R objects:"),
         shiny::br(),
         shiny::downloadButton(session$ns("download_result"), "Result (.rds)",
                               class="btn-default btn-sm", icon=shiny::icon("download")),
         if (has_cq)
           shiny::downloadButton(session$ns("download_cq"), "CausalQueries (.rds)",
                                 class="btn-default btn-sm", icon=shiny::icon("download")),
+        if (has_tt)
+          shiny::downloadButton(session$ns("download_tt"), "theorytools (.rds)",
+                                class="btn-default btn-sm", icon=shiny::icon("download")),
         shiny::downloadButton(session$ns("download_plot"), "Graph (.jpg)",
-                              class="btn-default btn-sm", icon=shiny::icon("image"))
+                              class="btn-default btn-sm", icon=shiny::icon("image")),
+        shiny::hr(style="margin:8px 0 4px;"),
+        shiny::strong(style="font-size:0.9em;", "Download preregistration document:"),
+        shiny::br(),
+        shiny::div(
+          style="display:flex; align-items:center; gap:8px; margin-top:4px; flex-wrap:wrap;",
+          shiny::selectInput(session$ns("doc_format"), label = NULL,
+                             choices  = doc_choices,
+                             selected = "qmd_bundle",
+                             width    = "220px"),
+          shiny::downloadButton(session$ns("download_doc"), "Download Document",
+                                class="btn-default btn-sm", icon=shiny::icon("file-alt"))
+        )
       )
     })
 
@@ -777,8 +1131,10 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
           )
         }),
         shiny::div(class="entropy-note",
-          sprintf("\U0001F4CA Shannon entropy: %.4f bits  (%.1f%% of maximum %d bits)",
-                  rv$result$entropy, 100*rv$result$entropy/log2(2^n_nodes), n_nodes))
+          sprintf("\U0001F4CA Shannon entropy: %.2f%%  (%.1f%% of maximum %.2f%%)",
+                  rv$result$entropy,
+                  100 * rv$result$entropy / (n_nodes * log(2, base = 1.01)),
+                  n_nodes * log(2, base = 1.01)))
       )
     })
 
@@ -797,7 +1153,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       }
       rv$current_idx <- 1L; rv$cpts <- NULL; rv$result <- NULL
       .init_modal_state(rv, nodes, parents, 1L)
-      .show_node_modal(session, nodes, parents, m, rv$pending, 1L, n_nodes)
+      .show_node_modal(session, nodes, parents, m, rv$pending, 1L, n_nodes,
+                       labels = shiny::isolate(labels_r()))
     })
 
     shiny::observeEvent(input$modal_next, {
@@ -808,7 +1165,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, m)
       nxt <- rv$current_idx + 1L; rv$current_idx <- nxt
       .init_modal_state(rv, nodes, parents, nxt)
-      .show_node_modal(session, nodes, parents, m, rv$pending, nxt, n_nodes)
+      .show_node_modal(session, nodes, parents, m, rv$pending, nxt, n_nodes,
+                       labels = shiny::isolate(labels_r()))
     })
 
     shiny::observeEvent(input$modal_prev, {
@@ -819,7 +1177,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, m)
       prv <- rv$current_idx - 1L; rv$current_idx <- prv
       .init_modal_state(rv, nodes, parents, prv)
-      .show_node_modal(session, nodes, parents, m, rv$pending, prv, n_nodes)
+      .show_node_modal(session, nodes, parents, m, rv$pending, prv, n_nodes,
+                       labels = shiny::isolate(labels_r()))
     })
 
     shiny::observeEvent(input$modal_done, {
@@ -871,7 +1230,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       rv$result <- structure(
         list(cpts=cpts, joint=joint, entropy=entropy_val,
              node_entropies=node_entropies, target=NULL, target_marginal=NULL,
-             dag=cur_dag, dag_info=cur_dag_info, mode=m),
+             dag=cur_dag, dag_info=cur_dag_info, mode=m,
+             labels=shiny::isolate(labels_r())),
         class = "elicit_dag_result"
       )
     })
@@ -896,7 +1256,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 #' two independent module instances do not share IDs.
 #' @keywords internal
 .show_node_modal <- function(session, nodes, parents, mode,
-                              pending, idx, n_total) {
+                              pending, idx, n_total, labels = NULL) {
   ns   <- session$ns
   node <- nodes[idx]
   pars <- parents[[node]]
@@ -912,25 +1272,47 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
   saved <- pending[[node]]
 
   input_rows <- lapply(seq_len(n_combos), function(i) {
-    label <- if (length(pars) == 0L) {
-      sprintf("P(%s = 1)", node)
+    parent_vals <- if (length(pars) > 0L) {
+      v <- as.integer(combos[i, pars, drop = TRUE])
+      stats::setNames(v, pars)
+    } else integer(0L)
+
+    node_lbl1  <- .node_val_label(node, 1L, labels)
+    prob_label <- if (length(pars) == 0L) {
+      sprintf("P(%s = %s)", node, node_lbl1)
     } else {
-      parts <- paste(pars, as.integer(combos[i, pars, drop=TRUE]), sep=" = ")
-      sprintf("P(%s = 1 \u2502 %s)", node, paste(parts, collapse=", "))
+      parts <- vapply(pars, function(p)
+        sprintf("%s = %s", p, .node_val_label(p, parent_vals[[p]], labels)),
+        character(1L))
+      sprintf("P(%s = %s \u2502 %s)", node, node_lbl1, paste(parts, collapse = ", "))
     }
+
+    lbl_sentence <- format_label_sentence(node, parent_vals, labels)
+
     val <- if (!is.null(saved[[i]])) as.numeric(saved[[i]]) else 0.5
-    shiny::div(class="prob-row",
+    shiny::div(class = "prob-row",
+      # Label sentence sits above the input control
+      shiny::p(lbl_sentence,
+               style = "font-style:italic; color:#555; font-size:0.85em;
+                        margin: 0 0 4px 0;"),
       if (mode == "probability") {
         shiny::tagList(
-          shiny::sliderInput(ns(paste0("prob_", i)), label,
-                             min=0, max=1, step=0.01, value=val, width="100%"),
+          shiny::sliderInput(ns(paste0("prob_", i)), prob_label,
+                             min = 0, max = 1, step = 0.01, value = val,
+                             width = "100%"),
+          shiny::div(
+            style = "display:flex; justify-content:space-between;
+                     font-size:0.76em; color:#999; margin:-10px 0 4px 0;",
+            shiny::span("Never Happens"),
+            shiny::span("Always Happens")
+          ),
           shiny::uiOutput(ns(paste0("bar_", i))),
-          shiny::div(class="comp-text",
-                     shiny::textOutput(ns(paste0("comp_", i)), inline=TRUE))
+          shiny::div(class = "comp-text",
+                     shiny::textOutput(ns(paste0("comp_", i)), inline = TRUE))
         )
       } else {
         nearest_key <- names(LIKERT_PROBS)[which.min(abs(LIKERT_PROBS - val))]
-        shiny::selectInput(ns(paste0("prob_", i)), label,
+        shiny::selectInput(ns(paste0("prob_", i)), prob_label,
                            choices  = .LIKERT_CHOICES,
                            selected = as.character(LIKERT_PROBS[nearest_key]),
                            width    = "100%")
@@ -1007,12 +1389,13 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 # ===========================================================================
 
 #' @keywords internal
-.draw_dag <- function(dag, dag_info, elicited=character(0), active=character(0)) {
+.draw_dag <- function(dag, dag_info, elicited=character(0), active=character(0),
+                      layout = "circle") {
   nodes  <- dag_info$nodes
   status <- ifelse(nodes %in% active,   "active",
             ifelse(nodes %in% elicited, "elicited", "pending"))
   status_df <- data.frame(name=nodes, status=status, stringsAsFactors=FALSE)
-  tidy      <- ggdag::tidy_dagitty(dag)
+  tidy      <- ggdag::tidy_dagitty(dag, layout = layout)
   tidy$data <- merge(tidy$data, status_df, by="name", all.x=TRUE)
   tidy$data$status[is.na(tidy$data$status)] <- "pending"
 
@@ -1033,3 +1416,46 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 # ===========================================================================
 
 `%||%` <- function(x, y) if (!is.null(x)) x else y
+
+
+#' Build the entropy comparison data frame for the Learning tab
+#'
+#' Returns one row per node (common to pre and post) plus a \code{[Joint]} row.
+#' @keywords internal
+.build_learning_df <- function(pre, post) {
+  common <- intersect(names(pre$node_entropies), names(post$node_entropies))
+
+  .ltype <- function(dh) {
+    if (abs(dh) < 1) "No Learning" else if (dh < 0) "Type I" else "Type II"
+  }
+
+  node_rows <- do.call(rbind, lapply(common, function(nd) {
+    dh  <- as.numeric(post$node_entropies[nd] - pre$node_entropies[nd])
+    dir <- if (dh < -1e-6) "less uncertain" else
+           if (dh > 1e-6) "more uncertain" else "no change"
+    data.frame(
+      Node               = nd,
+      `Pre entropy (%)`  = round(as.numeric(pre$node_entropies[nd]),  4),
+      `Post entropy (%)` = round(as.numeric(post$node_entropies[nd]), 4),
+      `Delta (%)`        = round(dh, 4),
+      Direction          = dir,
+      `Learning Type`    = .ltype(dh),
+      stringsAsFactors   = FALSE, check.names = FALSE
+    )
+  }))
+
+  dh_joint  <- post$entropy - pre$entropy
+  dir_joint <- if (dh_joint < -1e-6) "less uncertain" else
+               if (dh_joint > 1e-6) "more uncertain" else "no change"
+  joint_row <- data.frame(
+    Node               = "[Joint]",
+    `Pre entropy (%)`  = round(pre$entropy,  4),
+    `Post entropy (%)` = round(post$entropy, 4),
+    `Delta (%)`        = round(dh_joint, 4),
+    Direction          = dir_joint,
+    `Learning Type`    = .ltype(dh_joint),
+    stringsAsFactors   = FALSE, check.names = FALSE
+  )
+
+  rbind(node_rows, joint_row)
+}

@@ -35,6 +35,15 @@
 #'   and a result summary.
 #' @param .responses Named list of pre-specified responses for non-interactive
 #'   use. See the "Non-interactive use" section for the expected structure.
+#' @param labels Optional named list of value labels.  Each element must be a
+#'   length-2 character vector \code{c(label_for_0, label_for_1)} giving
+#'   human-readable names for the two values of that node (e.g.
+#'   \code{list(X = c("untreated", "treated"), Y = c("no", "yes"))}).  When
+#'   supplied, each console prompt is accompanied by a plain-English sentence
+#'   such as \emph{"How likely is Y to be 'yes' when X is 'treated'?"}.
+#'   Labels are stored in the returned result object and forwarded to the
+#'   Shiny app when using \code{\link{launch_app}}.  Nodes without an entry
+#'   in \code{labels} display numeric values (0 / 1) in the sentence.
 #'
 #' @return An object of class \code{"elicit_dag_result"}, invisibly. It is a
 #'   list with components:
@@ -112,7 +121,8 @@ elicit_dag_priors <- function(dag,
                                mode       = c("probability", "likert"),
                                target     = NULL,
                                verbose    = TRUE,
-                               .responses = NULL) {
+                               .responses = NULL,
+                               labels     = NULL) {
   mode <- match.arg(mode)
 
   # ------------------------------------------------------------------
@@ -138,6 +148,26 @@ elicit_dag_priors <- function(dag,
         "'.responses' contains unknown node name(s): %s",
         paste(bad_keys, collapse = ", ")
       ))
+    }
+  }
+
+  # Validate labels
+  if (!is.null(labels)) {
+    if (!is.list(labels)) stop("'labels' must be a named list.")
+    bad_keys <- setdiff(names(labels), dag_info$nodes)
+    if (length(bad_keys) > 0L) {
+      stop(sprintf(
+        "'labels' contains unknown node name(s): %s",
+        paste(bad_keys, collapse = ", ")
+      ))
+    }
+    for (nm in names(labels)) {
+      if (!is.character(labels[[nm]]) || length(labels[[nm]]) != 2L) {
+        stop(sprintf(
+          "labels[['%s']] must be a character vector of length 2: c(label_for_0, label_for_1)",
+          nm
+        ))
+      }
     }
   }
 
@@ -170,6 +200,7 @@ elicit_dag_priors <- function(dag,
       node         = node,
       parent_names = parents[[node]],
       mode         = mode,
+      labels       = labels,
       .responses   = node_resps
     )
   }
@@ -212,7 +243,8 @@ elicit_dag_priors <- function(dag,
       target_marginal = target_marginal,
       dag             = dag,
       dag_info        = dag_info,
-      mode            = mode
+      mode            = mode,
+      labels          = labels
     ),
     class = "elicit_dag_result"
   )

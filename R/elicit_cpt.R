@@ -19,6 +19,7 @@
 #' @keywords internal
 elicit_node_cpt <- function(node, parent_names,
                              mode       = "probability",
+                             labels     = NULL,
                              .responses = NULL) {
   n_parents <- length(parent_names)
 
@@ -30,7 +31,8 @@ elicit_node_cpt <- function(node, parent_names,
 
     resp <- if (!is.null(.responses)) .responses[[1L]] else NULL
     prob <- prompt_for_prob(
-      node, setNames(integer(0L), character(0L)), mode, .response = resp
+      node, setNames(integer(0L), character(0L)), mode,
+      labels = labels, .response = resp
     )
 
     cpt <- data.frame(prob = prob, stringsAsFactors = FALSE)
@@ -66,7 +68,8 @@ elicit_node_cpt <- function(node, parent_names,
       names(parent_vals) <- parent_names
 
       resp     <- if (!is.null(.responses)) .responses[[i]] else NULL
-      probs[i] <- prompt_for_prob(node, parent_vals, mode, .response = resp)
+      probs[i] <- prompt_for_prob(node, parent_vals, mode,
+                                  labels = labels, .response = resp)
     }
 
     # In Likert mode the raw values are discrete anchors that don't naturally

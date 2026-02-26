@@ -149,6 +149,124 @@ test_that("chain result converts without error and has correct node count", {
   expect_equal(length(unique(cq$parameters_df$node)), 3L)
 })
 
+# ---- query_model: end-to-end CPT recovery -----------------------------------
+#
+# These tests verify that the *model-level* conditional probabilities returned
+# by query_model(using = "parameters") match the originally elicited CPT values.
+# They serve as integration tests for the full pipeline:
+#   elicit_dag_priors -> to_causalqueries -> query_model.
+
+# Helper: run a single query_model call and return the scalar mean.
+.qm <- function(cq, query, given = NULL) {
+  q <- CausalQueries::query_model(
+    cq, queries = query, given = given, using = "parameters"
+  )
+  q$mean[[1L]]
+}
+
+test_that("query_model: P(Y=1|X=0) and P(Y=1|X=1) match elicited CPT (X -> Y)", {
+  py0 <- 0.2; py1 <- 0.75
+  dag <- dagitty("dag { X -> Y }")
+  res <- elicit_dag_priors(
+    dag, verbose = FALSE,
+    .responses = list(X = list(0.5), Y = list(py0, py1))
+  )
+  cq <- to_causalqueries(res)
+
+  expect_equal(.qm(cq, "Y == 1", given = "X == 0"), py0, tolerance = 1e-8)
+  expect_equal(.qm(cq, "Y == 1", given = "X == 1"), py1, tolerance = 1e-8)
+})
+
+test_that("query_model: interventional P(Y[X=0]=1) and P(Y[X=1]=1) match CPT", {
+  py0 <- 0.15; py1 <- 0.80
+  dag <- dagitty("dag { X -> Y }")
+  res <- elicit_dag_priors(
+    dag, verbose = FALSE,
+    .responses = list(X = list(0.5), Y = list(py0, py1))
+  )
+  cq <- to_causalqueries(res)
+
+  expect_equal(.qm(cq, "Y[X=0] == 1"), py0, tolerance = 1e-8)
+  expect_equal(.qm(cq, "Y[X=1] == 1"), py1, tolerance = 1e-8)
+})
+
+test_that("query_model: ATE equals py1 - py0 for X -> Y", {
+  py0 <- 0.15; py1 <- 0.80
+  dag <- dagitty("dag { X -> Y }")
+  res <- elicit_dag_priors(
+    dag, verbose = FALSE,
+    .responses = list(X = list(0.5), Y = list(py0, py1))
+  )
+  cq <- to_causalqueries(res)
+
+  # P(Y=1 | do(X=1)) - P(Y=1 | do(X=0))
+  ate <- .qm(cq, "Y[X=1] == 1") - .qm(cq, "Y[X=0] == 1")
+  expect_equal(ate, py1 - py0, tolerance = 1e-8)
+})
+
+test_that("query_model: all four CPT cells recovered for collider X -> Z <- Y", {
+  p00 <- 0.10; p10 <- 0.40; p01 <- 0.30; p11 <- 0.90
+  dag <- dagitty("dag { X -> Z; Y -> Z }")
+  res <- elicit_dag_priors(
+    dag, verbose = FALSE,
+    .responses = list(
+      X = list(0.5),
+      Y = list(0.5),
+      Z = list(p00, p10, p01, p11)
+    )
+  )
+  cq <- to_causalqueries(res)
+
+  expect_equal(.qm(cq, "Z == 1", "X == 0 & Y == 0"), p00, tolerance = 1e-8)
+  expect_equal(.qm(cq, "Z == 1", "X == 1 & Y == 0"), p10, tolerance = 1e-8)
+  expect_equal(.qm(cq, "Z == 1", "X == 0 & Y == 1"), p01, tolerance = 1e-8)
+  expect_equal(.qm(cq, "Z == 1", "X == 1 & Y == 1"), p11, tolerance = 1e-8)
+})
+
+test_that("query_model: chain X -> Y -> Z — each conditional matches CPT", {
+  py0 <- 0.10; py1 <- 0.90
+  pz0 <- 0.20; pz1 <- 0.80
+  dag <- dagitty("dag { X -> Y -> Z }")
+  res <- elicit_dag_priors(
+    dag, verbose = FALSE,
+    .responses = list(
+      X = list(0.5),
+      Y = list(py0, py1),
+      Z = list(pz0, pz1)
+    )
+  )
+  cq <- to_causalqueries(res)
+
+  # CPT for Y | X
+  expect_equal(.qm(cq, "Y == 1", "X == 0"), py0, tolerance = 1e-8)
+  expect_equal(.qm(cq, "Y == 1", "X == 1"), py1, tolerance = 1e-8)
+
+  # CPT for Z | Y
+  expect_equal(.qm(cq, "Z == 1", "Y == 0"), pz0, tolerance = 1e-8)
+  expect_equal(.qm(cq, "Z == 1", "Y == 1"), pz1, tolerance = 1e-8)
+})
+
+test_that("query_model: fork X <- Z -> Y — CPTs for both children match", {
+  # Z is the common cause; X and Y are independent given Z
+  px0 <- 0.30; px1 <- 0.70   # P(X=1 | Z=0), P(X=1 | Z=1)
+  py0 <- 0.10; py1 <- 0.60   # P(Y=1 | Z=0), P(Y=1 | Z=1)
+  dag <- dagitty("dag { Z -> X; Z -> Y }")
+  res <- elicit_dag_priors(
+    dag, verbose = FALSE,
+    .responses = list(
+      Z = list(0.5),
+      X = list(px0, px1),
+      Y = list(py0, py1)
+    )
+  )
+  cq <- to_causalqueries(res)
+
+  expect_equal(.qm(cq, "X == 1", "Z == 0"), px0, tolerance = 1e-8)
+  expect_equal(.qm(cq, "X == 1", "Z == 1"), px1, tolerance = 1e-8)
+  expect_equal(.qm(cq, "Y == 1", "Z == 0"), py0, tolerance = 1e-8)
+  expect_equal(.qm(cq, "Y == 1", "Z == 1"), py1, tolerance = 1e-8)
+})
+
 # ---- error handling ---------------------------------------------------------
 
 test_that("to_causalqueries errors on non-result input", {

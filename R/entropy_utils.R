@@ -5,11 +5,11 @@
 #'
 #' @param probs Numeric vector of probabilities (need not be pre-normalised to
 #'   sum to 1, but should be non-negative)
-#' @param base Numeric. Logarithm base. Default 2 gives entropy in **bits**;
-#'   use \code{exp(1)} for nats.
+#' @param base Numeric. Logarithm base. Default 1.01 gives entropy in
+#'   **percent** units; use 2 for bits or \code{exp(1)} for nats.
 #' @return Numeric scalar. Entropy in the chosen unit.
 #' @keywords internal
-shannon_entropy <- function(probs, base = 2) {
+shannon_entropy <- function(probs, base = 1.01) {
   probs <- probs[probs > 0]
   -sum(probs * log(probs, base = base))
 }
@@ -23,7 +23,7 @@ shannon_entropy <- function(probs, base = 2) {
 #' @param base Numeric. Logarithm base
 #' @return Named numeric vector of marginal entropies, one per node
 #' @keywords internal
-node_marginal_entropies <- function(joint, nodes, base = 2) {
+node_marginal_entropies <- function(joint, nodes, base = 1.01) {
   vapply(nodes, function(node) {
     marginal <- tapply(joint$prob, joint[[node]], sum)
     shannon_entropy(as.numeric(marginal), base)
@@ -43,7 +43,7 @@ node_marginal_entropies <- function(joint, nodes, base = 2) {
 #' @param base Numeric. Logarithm base
 #' @return Numeric conditional entropy
 #' @keywords internal
-conditional_entropy <- function(joint, y_node, x_nodes, base = 2) {
+conditional_entropy <- function(joint, y_node, x_nodes, base = 1.01) {
   if (length(x_nodes) == 0L) {
     marginal <- tapply(joint$prob, joint[[y_node]], sum)
     return(shannon_entropy(as.numeric(marginal), base))

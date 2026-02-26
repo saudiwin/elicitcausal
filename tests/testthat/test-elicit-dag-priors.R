@@ -34,10 +34,10 @@ test_that("joint distribution has 2^n rows and sums to 1", {
   expect_equal(sum(result$joint$prob), 1, tolerance = 1e-10)
 })
 
-test_that("entropy is non-negative and bounded by log2(2^n)", {
+test_that("entropy is non-negative and bounded by log_1.01(2^n)", {
   result <- run_chain()
   expect_gte(result$entropy, 0)
-  expect_lte(result$entropy, log2(8) + 1e-10)
+  expect_lte(result$entropy, log(8, base = 1.01) + 1e-6)
 })
 
 test_that("target_marginal is returned when target is specified", {

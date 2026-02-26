@@ -4,7 +4,13 @@
 \alias{prompt_for_prob}
 \title{Prompt the user for a single conditional probability}
 \usage{
-prompt_for_prob(node, parent_values, mode = "probability", .response = NULL)
+prompt_for_prob(
+  node,
+  parent_values,
+  mode = "probability",
+  labels = NULL,
+  .response = NULL
+)
 }
 \arguments{
 \item{node}{Character. Outcome node name}
@@ -13,6 +19,10 @@ prompt_for_prob(node, parent_values, mode = "probability", .response = NULL)
 root nodes)}
 
 \item{mode}{Character. "probability" or "likert"}
+
+\item{labels}{Optional named list of value labels; each element is a
+length-2 character vector \code{c(label_for_0, label_for_1)}.  When
+supplied, a plain-English sentence is printed beneath the formal query.}
 
 \item{.response}{Optional pre-specified response (character or numeric).
 When provided, interactive input is skipped.}

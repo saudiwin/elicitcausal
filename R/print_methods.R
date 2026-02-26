@@ -27,7 +27,7 @@ print.elicit_dag_result <- function(x, digits = 4L, top_states = 5L, ...) {
   # ------------------------------------------------------------------
   # Joint distribution summary
   # ------------------------------------------------------------------
-  max_entropy <- log2(n_states)
+  max_entropy <- log(n_states, base = 1.01)
   pct_max     <- if (max_entropy > 0) 100 * x$entropy / max_entropy else 0
 
   cat(sprintf(
@@ -35,12 +35,12 @@ print.elicit_dag_result <- function(x, digits = 4L, top_states = 5L, ...) {
     n_nodes, n_states
   ))
   cat(sprintf(
-    "Shannon entropy : %.4f bits  (max %.4f bits, %.1f%% of maximum)\n",
+    "Shannon entropy : %.2f%%  (max %.2f%%, %.1f%% of maximum)\n",
     x$entropy, max_entropy, pct_max
   ))
 
   # Marginal entropy per node
-  cat("\nMarginal entropy per node (bits):\n")
+  cat("\nMarginal entropy per node (%):\n")
   for (node in nodes) {
     cat(sprintf("  H(%-12s) = %.4f\n", node, x$node_entropies[node]))
   }
@@ -69,7 +69,7 @@ print.elicit_dag_result <- function(x, digits = 4L, top_states = 5L, ...) {
         "  P(%s = %d) = %.*f\n", x$target, tm$value[i], digits, tm$prob[i]
       ))
     }
-    cat(sprintf("  H(%s) = %.4f bits\n", x$target, h_t))
+    cat(sprintf("  H(%s) = %.2f%%\n", x$target, h_t))
   }
 
   invisible(x)
