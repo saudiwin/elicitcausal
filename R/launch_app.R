@@ -1140,7 +1140,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
     output$cpt_display <- shiny::renderUI({
       if (is.null(rv$cpts))
         return(shiny::div(style="color:#999;margin-top:16px;",
-                          shiny::icon("arrow-left"),
+                          shiny::icon("arrow-up"),
                           ' Click "Elicit Probabilities" to begin.'))
 
       nodes <- nodes_r(); parents <- parents_r(); n_nodes <- n_nodes_r()
