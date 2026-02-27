@@ -344,10 +344,10 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
             ),
             shiny::div(
               class = "dag-hint",
-              "Build your DAG visually at ",
+              "Write your causal graph in dagitty format in the text box below. If you need help, try building your causal graph visually at ",
               shiny::tags$a("dagitty.net", href = "https://dagitty.net", target = "_blank"),
               ", then copy the model code (Model \u2192 Export \u2192 dagitty code)",
-              " and paste it above. The graph updates automatically."
+              " and paste it below. The graph updates automatically."
             ),
             shiny::div(
               class = "dag-textarea",
