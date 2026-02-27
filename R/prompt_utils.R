@@ -76,7 +76,7 @@ format_query <- function(node, parent_values) {
 #' for any node without an explicit label entry.
 #'
 #' \itemize{
-#'   \item \strong{Root nodes} (no parents): \emph{"How likely is X to be
+#'   \item \strong{Root nodes} (no parents): \emph{"In general, how likely is X to be
 #'     \sQuote{High}?"}
 #'   \item \strong{Endogenous nodes} (one or more parents): \emph{"Suppose
 #'     that Z is \sQuote{High} and X is \sQuote{Low}. In that case, how
@@ -96,7 +96,7 @@ format_label_sentence <- function(node, parent_values, labels) {
 
   if (length(parent_values) == 0L) {
     # Root / exogenous node
-    sprintf("How likely is %s to be \"%s\"?", node, node_lbl)
+    sprintf("In general, how likely is %s to be \"%s\"?", node, node_lbl)
   } else {
     # Endogenous node: "Suppose that … . In that case, how likely is it that Y will be '…'?"
     parent_parts <- vapply(names(parent_values), function(p) {

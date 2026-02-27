@@ -340,7 +340,14 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
             shiny::tags$label(
               `for` = ns("dag_text"),
               style = "font-weight:600; font-size:0.9em; margin-bottom:3px; display:block;",
-              "DAG specification"
+              "Causal graph specification in dagitty format"
+            ),
+            shiny::div(
+              class = "dag-hint",
+              "Build your DAG visually at ",
+              shiny::tags$a("dagitty.net", href = "https://dagitty.net", target = "_blank"),
+              ", then copy the model code (Model \u2192 Export \u2192 dagitty code)",
+              " and paste it above. The graph updates automatically."
             ),
             shiny::div(
               class = "dag-textarea",
@@ -348,14 +355,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
                                    rows = 3L, width = "100%",
                                    placeholder = "dag { X -> Y -> Z }")
             ),
-            shiny::uiOutput(ns("dag_text_status")),
-            shiny::div(
-              class = "dag-hint",
-              "Build your DAG visually at ",
-              shiny::tags$a("dagitty.net", href = "https://dagitty.net", target = "_blank"),
-              ", then copy the model code (Model \u2192 Export \u2192 dagitty code)",
-              " and paste it above. The graph updates automatically."
-            )
+            shiny::uiOutput(ns("dag_text_status"))
           )
         }
       )
@@ -689,7 +689,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       modal_probs     = NULL,
       n_active_combos = 0L,
       dag_error       = NULL,
-      uploaded_pre    = NULL
+      uploaded_pre    = NULL,
+      prefill_labels  = NULL   # list(node_labels = ..., value_labels = ...)
     )
 
     # ------------------------------------------------------------------
@@ -701,6 +702,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       tryCatch({
         imported        <- import_elicit_result(req_file$datapath)
         rv$uploaded_pre <- imported
+        rv$prefill_labels <- list(node_labels  = imported$node_labels,
+                                  value_labels = imported$labels)
         # Propagate to the pre-study tab so entropy comparison works
         if (!is.null(uploaded_override_rv))
           uploaded_override_rv$imported_pre <- imported
@@ -750,23 +753,34 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
           class = "table table-condensed",
           style = "font-size:0.85em; margin-bottom:6px;",
           shiny::tags$thead(shiny::tags$tr(
-            shiny::tags$th("Node", style = "width:20%;"),
-            shiny::tags$th("Label for 0", style = "width:40%;"),
-            shiny::tags$th("Label for 1", style = "width:40%;")
+            shiny::tags$th("Node", style = "width:12%;"),
+            shiny::tags$th("Display name", style = "width:30%;"),
+            shiny::tags$th("Label for 0", style = "width:29%;"),
+            shiny::tags$th("Label for 1", style = "width:29%;")
           )),
           shiny::tags$tbody(
             lapply(nodes, function(nd) {
+              pfl      <- rv$prefill_labels
+              pfl_name <- pfl$node_labels[[nd]]   %||% ""
+              pfl_lbl  <- pfl$value_labels[[nd]]
+              val0 <- if (!is.null(pfl_lbl) && nzchar(pfl_lbl[1L])) pfl_lbl[1L] else "Low"
+              val1 <- if (!is.null(pfl_lbl) && nzchar(pfl_lbl[2L])) pfl_lbl[2L] else "High"
 
               shiny::tags$tr(
                 shiny::tags$td(shiny::strong(nd)),
                 shiny::tags$td(shiny::textInput(
+                  shiny::NS(id)(paste0("label_", nd, "_name")), label = NULL,
+                  value = pfl_name, placeholder = "e.g. Treatment",
+                  width = "100%"
+                )),
+                shiny::tags$td(shiny::textInput(
                   shiny::NS(id)(paste0("label_", nd, "_0")), label = NULL,
-                  value = "Low", placeholder = "e.g. absent / no / 0",
+                  value = val0, placeholder = "e.g. absent / no / 0",
                   width = "100%"
                 )),
                 shiny::tags$td(shiny::textInput(
                   shiny::NS(id)(paste0("label_", nd, "_1")), label = NULL,
-                  value = "High", placeholder = "e.g. present / yes / 1",
+                  value = val1, placeholder = "e.g. present / yes / 1",
                   width = "100%"
                 ))
               )
@@ -794,6 +808,20 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       }
       result <- Filter(Negate(is.null), result)
       if (length(result) == 0L) NULL else result
+    })
+
+    # Collect node display-name labels (used in the DAG plot)
+    node_display_labels_r <- shiny::reactive({
+      nodes <- nodes_r()
+      if (length(nodes) == 0L) return(NULL)
+      lbl <- vapply(nodes, function(nd) {
+        trimws(input[[paste0("label_", nd, "_name")]] %||% "")
+      }, character(1L))
+      names(lbl) <- nodes
+      if (all(!nzchar(lbl))) return(NULL)
+      # Fill blanks with the node name so .draw_dag always has a full vector
+      lbl[!nzchar(lbl)] <- nodes[!nzchar(lbl)]
+      lbl
     })
 
     # ------------------------------------------------------------------
@@ -858,10 +886,12 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
             lapply(nodes_imp, function(nd) as.list(imp$cpts[[nd]]$prob)),
             nodes_imp
           )
-          rv$cpts        <- imp$cpts
-          rv$result      <- imp
-          rv$dag_error   <- NULL
-          rv$current_idx <- 1L
+          rv$cpts           <- imp$cpts
+          rv$result         <- imp
+          rv$dag_error      <- NULL
+          rv$current_idx    <- 1L
+          rv$prefill_labels <- list(node_labels  = imp$node_labels,
+                                    value_labels = imp$labels)
           shiny::showNotification(
             paste0("Pre-study file loaded into Pre-Study tab (",
                    length(nodes_imp), " node",
@@ -888,8 +918,10 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
           lapply(nodes_pre, function(nd) as.list(pre$cpts[[nd]]$prob)),
           nodes_pre
         )
-        rv$cpts   <- NULL
-        rv$result <- NULL
+        rv$cpts           <- NULL
+        rv$result         <- NULL
+        rv$prefill_labels <- list(node_labels  = pre$node_labels,
+                                  value_labels = pre$labels)
       }, ignoreNULL = FALSE)
 
       # Show the current locked DAG string (or a placeholder)
@@ -997,7 +1029,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
                       rv$current_idx >= 1L && rv$current_idx <= n)
                     nodes[rv$current_idx] else character(0)
       .draw_dag(d, di, elicited = elicited, active = active,
-                layout = input$dag_layout %||% "circle")
+                layout = input$dag_layout %||% "circle",
+                node_labels = node_display_labels_r())
     }, bg = "white")
 
     # ------------------------------------------------------------------
@@ -1034,7 +1067,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
         d <- shiny::isolate(dag_rv()); di <- shiny::isolate(dag_info_rv())
         elicited <- if (!is.null(rv$cpts)) names(rv$cpts) else character(0)
         p <- .draw_dag(d, di, elicited = elicited,
-                       layout = shiny::isolate(input$dag_layout) %||% "circle")
+                       layout = shiny::isolate(input$dag_layout) %||% "circle",
+                       node_labels = shiny::isolate(node_display_labels_r()))
         grDevices::jpeg(file, width=1200, height=900, res=150, quality=95)
         print(p)
         grDevices::dev.off()
@@ -1154,7 +1188,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       rv$current_idx <- 1L; rv$cpts <- NULL; rv$result <- NULL
       .init_modal_state(rv, nodes, parents, 1L)
       .show_node_modal(session, nodes, parents, m, rv$pending, 1L, n_nodes,
-                       labels = shiny::isolate(labels_r()))
+                       labels      = shiny::isolate(labels_r()),
+                       node_labels = shiny::isolate(node_display_labels_r()))
     })
 
     shiny::observeEvent(input$modal_next, {
@@ -1166,7 +1201,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       nxt <- rv$current_idx + 1L; rv$current_idx <- nxt
       .init_modal_state(rv, nodes, parents, nxt)
       .show_node_modal(session, nodes, parents, m, rv$pending, nxt, n_nodes,
-                       labels = shiny::isolate(labels_r()))
+                       labels      = shiny::isolate(labels_r()),
+                       node_labels = shiny::isolate(node_display_labels_r()))
     })
 
     shiny::observeEvent(input$modal_prev, {
@@ -1178,7 +1214,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       prv <- rv$current_idx - 1L; rv$current_idx <- prv
       .init_modal_state(rv, nodes, parents, prv)
       .show_node_modal(session, nodes, parents, m, rv$pending, prv, n_nodes,
-                       labels = shiny::isolate(labels_r()))
+                       labels      = shiny::isolate(labels_r()),
+                       node_labels = shiny::isolate(node_display_labels_r()))
     })
 
     shiny::observeEvent(input$modal_done, {
@@ -1231,13 +1268,29 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
         list(cpts=cpts, joint=joint, entropy=entropy_val,
              node_entropies=node_entropies, target=NULL, target_marginal=NULL,
              dag=cur_dag, dag_info=cur_dag_info, mode=m,
-             labels=shiny::isolate(labels_r())),
+             labels=shiny::isolate(labels_r()),
+             node_labels=shiny::isolate(node_display_labels_r())),
         class = "elicit_dag_result"
       )
     })
 
     shiny::observeEvent(input$modal_cancel, {
       shiny::removeModal(); rv$current_idx <- 1L
+    })
+
+    shiny::observeEvent(input$modal_reset, {
+      n <- rv$n_active_combos
+      if (n <= 0L) return()
+      if (shiny::isolate(mode_r()) == "probability") {
+        equal_prob     <- 1 / n
+        rv$modal_probs <- rep(equal_prob, n)
+        for (j in seq_len(n))
+          shiny::updateSliderInput(session, paste0("prob_", j), value = equal_prob)
+      } else {
+        # Likert: each combo is independent; max entropy per combo = ~50%
+        for (j in seq_len(n))
+          shiny::updateSelectInput(session, paste0("prob_", j), selected = "0.50")
+      }
     })
 
     # Return the result as a reactive for the parent server
@@ -1256,11 +1309,18 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 #' two independent module instances do not share IDs.
 #' @keywords internal
 .show_node_modal <- function(session, nodes, parents, mode,
-                              pending, idx, n_total, labels = NULL) {
+                              pending, idx, n_total, labels = NULL,
+                              node_labels = NULL) {
   ns   <- session$ns
   node <- nodes[idx]
   pars <- parents[[node]]
   n_combos <- if (length(pars) == 0L) 1L else 2L^length(pars)
+
+  # Returns "X (Display Name)" when a display label exists, else just "X"
+  .ndl <- function(nd) {
+    lbl <- node_labels[[nd]]
+    if (!is.null(lbl) && nzchar(trimws(lbl))) sprintf("%s (%s)", nd, lbl) else nd
+  }
 
   combos <- if (length(pars) > 0L)
     stats::setNames(
@@ -1279,12 +1339,12 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 
     node_lbl1  <- .node_val_label(node, 1L, labels)
     prob_label <- if (length(pars) == 0L) {
-      sprintf("P(%s = %s)", node, node_lbl1)
+      sprintf("P(%s = %s)", .ndl(node), node_lbl1)
     } else {
       parts <- vapply(pars, function(p)
-        sprintf("%s = %s", p, .node_val_label(p, parent_vals[[p]], labels)),
+        sprintf("%s = %s", .ndl(p), .node_val_label(p, parent_vals[[p]], labels)),
         character(1L))
-      sprintf("P(%s = %s \u2502 %s)", node, node_lbl1, paste(parts, collapse = ", "))
+      sprintf("P(%s = %s \u2502 %s)", .ndl(node), node_lbl1, paste(parts, collapse = ", "))
     }
 
     lbl_sentence <- format_label_sentence(node, parent_vals, labels)
@@ -1293,7 +1353,9 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
     shiny::div(class = "prob-row",
       # Label sentence sits above the input control
       shiny::p(lbl_sentence,
-               style = "font-style:italic; color:#555; font-size:0.85em;
+               style = "font-weight: bold;
+                        color: #000;
+                        font-size: 1.1em;
                         margin: 0 0 4px 0;"),
       if (mode == "probability") {
         shiny::tagList(
@@ -1302,7 +1364,9 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
                              width = "100%"),
           shiny::div(
             style = "display:flex; justify-content:space-between;
-                     font-size:0.76em; color:#999; margin:-10px 0 4px 0;",
+                      font-weight: 700;
+                      color: black;
+                     font-size:0.76em; margin:-10px 0 4px 0;",
             shiny::span("Never Happens"),
             shiny::span("Always Happens")
           ),
@@ -1321,9 +1385,10 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
   })
 
   title_str <- if (length(pars) == 0L)
-    sprintf("Node: %s  \u2014  prior probability", node)
+    sprintf("Node: %s  \u2014  prior probability", .ndl(node))
   else
-    sprintf("Node: %s  \u2502  Parents: %s", node, paste(pars, collapse=", "))
+    sprintf("Node: %s  \u2502  Parents: %s", .ndl(node),
+            paste(vapply(pars, .ndl, character(1L)), collapse = ", "))
 
   hint <- if (mode == "probability")
     "Drag each slider to set the probability that the node equals 1. Sliders are coupled and sum to 1."
@@ -1336,8 +1401,12 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       shiny::strong(title_str),
       shiny::span(class="progress-tag", sprintf("%d of %d", idx, n_total))
     ),
-    shiny::p(class="text-muted", style="margin-bottom:10px;", hint),
-    shiny::hr(style="margin:8px 0 14px;"),
+    shiny::p(class="text-muted", style="margin-bottom:6px;", hint),
+    shiny::actionButton(ns("modal_reset"),
+                        "\u21ba Reset to Maximum Uncertainty (Entropy)",
+                        class = "btn-default btn-sm",
+                        title = "Sets all probabilities to equal values, maximising entropy for this node"),
+    shiny::hr(style="margin:10px 0 14px;"),
     do.call(shiny::tagList, input_rows),
     footer = shiny::tagList(
       shiny::actionButton(ns("modal_cancel"), "Cancel",
@@ -1390,23 +1459,47 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 
 #' @keywords internal
 .draw_dag <- function(dag, dag_info, elicited=character(0), active=character(0),
-                      layout = "circle") {
+                      layout = "circle", node_labels = NULL) {
   nodes  <- dag_info$nodes
   status <- ifelse(nodes %in% active,   "active",
             ifelse(nodes %in% elicited, "elicited", "pending"))
   status_df <- data.frame(name=nodes, status=status, stringsAsFactors=FALSE)
-  tidy      <- ggdag::tidy_dagitty(dag, layout = layout)
+
+  # Merge in display labels; fall back to node name when not supplied
+  if (!is.null(node_labels)) {
+    lbl_df <- data.frame(name = names(node_labels),
+                         display_label = unname(as.character(node_labels)),
+                         stringsAsFactors = FALSE)
+    status_df <- merge(status_df, lbl_df, by = "name", all.x = TRUE)
+    status_df$display_label[is.na(status_df$display_label)] <-
+      status_df$name[is.na(status_df$display_label)]
+  } else {
+    status_df$display_label <- status_df$name
+  }
+
+  tidy      <- try(ggdag::tidy_dagitty(dag, layout = layout))
+
+  if('try-error' %in% class(tidy)) return(NULL)
+
   tidy$data <- merge(tidy$data, status_df, by="name", all.x=TRUE)
   tidy$data$status[is.na(tidy$data$status)] <- "pending"
+  tidy$data$display_label[is.na(tidy$data$display_label)] <-
+    tidy$data$name[is.na(tidy$data$display_label)]
+
+  # Scale text size to fit longer display labels inside the node circle
+  max_len  <- max(nchar(tidy$data$display_label), na.rm = TRUE)
+  txt_size <- if (max_len <= 4L) 3.8 else if (max_len <= 8L) 2.8 else 2.2
 
   ggplot2::ggplot(tidy$data, ggplot2::aes(x=x, y=y, xend=xend, yend=yend)) +
     ggdag::geom_dag_edges(edge_colour="#95a5a6") +
     ggdag::geom_dag_point(ggplot2::aes(colour=status), size=20) +
-    ggdag::geom_dag_text(ggplot2::aes(label=name), colour="white", size=3.8, fontface="bold") +
+    ggdag::geom_dag_text(ggplot2::aes(label=display_label), colour="white",
+                         size=txt_size, fontface="bold") +
     ggplot2::scale_colour_manual(
       values = c(elicited="#27ae60", active="#e67e22", pending="#bdc3c7"),
       guide  = "none") +
     ggdag::theme_dag() +
+    ggplot2::coord_cartesian(clip="off") +
     ggplot2::theme(plot.background=ggplot2::element_rect(fill="white", colour=NA))
 }
 
