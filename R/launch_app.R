@@ -1488,12 +1488,12 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 
   # Scale text size to fit longer display labels inside the node circle
   max_len  <- max(nchar(tidy$data$display_label), na.rm = TRUE)
-  txt_size <- if (max_len <= 4L) 3.8 else if (max_len <= 8L) 2.8 else 2.2
-
-  ggplot2::ggplot(tidy$data, ggplot2::aes(x=x, y=y, xend=xend, yend=yend)) +
+  #txt_size <- if (max_len <= 4L) 3.8 else if (max_len <= 8L) 2.8 else 2.2
+  txt_size <- 3.8
+  p <- ggplot2::ggplot(tidy$data, ggplot2::aes(x=x, y=y, xend=xend, yend=yend)) +
     ggdag::geom_dag_edges(edge_colour="#95a5a6") +
     ggdag::geom_dag_point(ggplot2::aes(colour=status), size=20) +
-    ggdag::geom_dag_text(ggplot2::aes(label=display_label), colour="white",
+    ggdag::geom_dag_text(ggplot2::aes(label=name), colour="white",
                          size=txt_size, fontface="bold") +
     ggplot2::scale_colour_manual(
       values = c(elicited="#27ae60", active="#e67e22", pending="#bdc3c7"),
@@ -1501,6 +1501,16 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
     ggdag::theme_dag() +
     ggplot2::coord_cartesian(clip="off") +
     ggplot2::theme(plot.background=ggplot2::element_rect(fill="white", colour=NA))
+
+if(!is.null(node_labels)) {
+
+  p <-  p +     ggdag::geom_dag_label_repel(ggplot2::aes(label=display_label), colour="black",
+                         size=3.8, fontface="bold", check_overlap = T)
+
+}
+
+  p
+
 }
 
 
