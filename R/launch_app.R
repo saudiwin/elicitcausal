@@ -223,18 +223,17 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       shiny::span(class = "num", "4"),
       shiny::strong("Download (optional)."),
       " After completing elicitation, use the download buttons to save the
-       result as an RDS file that can be used in R. You can also export as a CausalQueries model RDS file, and/or save the
-       graph as a JPEG."),
+       result as a Word/Latex/Markdown file or as an elicitcausal RDS file that can be further analyzed in R. You can also export as a CausalQueries and/or theorytools model RDS file."),
     shiny::div(class = "step",
       shiny::span(class = "num", "5"),
       shiny::strong("Repeat for Post-Study."),
       " Go to the ", shiny::strong("Causal Graph Post-Study"), " tab and
-       repeat the process after completing the study. You should update the graph with any new information that changes your beliefs about how variables are related to each other."),
+       repeat the process after completing the study. You can either upload the file you saved to re-load the pre-study graph or input the pre-study graph probabilities manually. You should update the graph with any new information that changes your beliefs about how variables are related to each other."),
     shiny::div(class = "step",
       shiny::span(class = "num", "6"),
       shiny::strong("Compare."),
       " Open the ", shiny::strong("Causal Learning from Graphs"), " tab to
-       see the amount of causal learning that occurred from pre- to post-study. We use the entropy metric to provide a quantified summary of learning. An entropy reduction means we became more certain of the graph, while an increase means we became less certain."),
+       see the amount of causal learning that occurred from pre- to post-study. We use the entropy metric to provide a quantified summary of learning. An entropy reduction means we became more certain of the graph (type I causal learning), while an increase means we became less certain (type II causal learning)."),
 
     shiny::h3("Causal Graph/DAG specification format"),
     shiny::p("Nodes are separated by spaces or newlines. Directed edges use ",
@@ -355,7 +354,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
                                    rows = 3L, width = "100%",
                                    placeholder = "dag { X -> Y -> Z }")
             ),
-            shiny::uiOutput(ns("dag_text_status"))
+            shiny::uiOutput(ns("dag_text_status")),
+            shiny::uiOutput("btn_close_pre_ui")
           )
         }
       )
@@ -398,8 +398,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
   shiny::div(
     style = "padding: 20px 10px; max-width: 960px; margin: 0 auto;",
     shiny::uiOutput("learning_display"),
-    shiny::plotOutput("learning_plot", height = "320px"),
     shiny::uiOutput("learning_download_ui"),
+    shiny::plotOutput("learning_plot", height = "320px"),
     shiny::uiOutput("btn_close_global_ui")
   )
 }
@@ -617,13 +617,10 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
     )
 
     # ------------------------------------------------------------------
-    # Global "Close & Return to R" button in tab 4
+    # "Close & Return to R" button — shared renderer, two placements
     # ------------------------------------------------------------------
-    output$btn_close_global_ui <- shiny::renderUI({
+    .close_btn_ui <- function() {
       if (hide_close) return(NULL)
-      pre  <- pre_r()
-      post <- post_r()
-      if (is.null(pre) && is.null(post)) return(NULL)
       shiny::div(
         style = "margin-top: 20px; padding-top: 14px; border-top: 1px solid #dee2e6;",
         shiny::actionButton(
@@ -634,6 +631,18 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
         shiny::span(style = "font-size:0.82em; color:#888; margin-left:12px;",
                     "Returns list(pre = ..., post = ...) to the R session.")
       )
+    }
+
+    # Pre-study tab: below DAG text box
+    output$btn_close_pre_ui <- shiny::renderUI({
+      pre_r(); post_r()   # take dependency so button appears once either tab completes
+      .close_btn_ui()
+    })
+
+    # Learning tab
+    output$btn_close_global_ui <- shiny::renderUI({
+      pre_r(); post_r()
+      .close_btn_ui()
     })
 
     shiny::observeEvent(input$btn_close_global, {
