@@ -194,6 +194,9 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
     <a href='https://doi.org/10.31235/osf.io/a492b' target='_blank' rel='noopener noreferrer'>
     the related paper 'Holistic Causal Learning with Causal Graphs: A Credible Method for Study Design and Preregistration in the Social Sciences'</a>."
   ),
+  shiny::HTML("
+    <br><br>To report a bug, please file an issue at the <a href='https://github.com/saudiwin/elicitcausal' target='_blank' rel='noopener noreferrer'>package Github site</a>."
+  ),
 
     shiny::h3("Workflow"),
     shiny::div(class = "step",
@@ -228,7 +231,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       shiny::span(class = "num", "5"),
       shiny::strong("Repeat for Post-Study."),
       " Go to the ", shiny::strong("Causal Graph Post-Study"), " tab and
-       repeat the process after completing the study. You can either upload the file you saved to re-load the pre-study graph or input the pre-study graph probabilities manually. You should update the graph with any new information that changes your beliefs about how variables are related to each other."),
+       repeat the process after completing the study. You can either upload the file you saved to re-load the pre-study graph or input the pre-study graph probabilities manually (such as if you are interactively checking different research designs). You should update the graph with any new information that changes your beliefs about how variables are related to each other."),
     shiny::div(class = "step",
       shiny::span(class = "num", "6"),
       shiny::strong("Compare."),
@@ -1291,7 +1294,9 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       n <- rv$n_active_combos
       if (n <= 0L) return()
       if (shiny::isolate(mode_r()) == "probability") {
-        equal_prob     <- 1 / n
+        # Root node (n == 1): max entropy for a binary variable is P = 0.5.
+        # Non-root (n > 1): sliders are coupled and sum to 1, so equal = 1/n.
+        equal_prob     <- if (n == 1L) 0.5 else 1 / n
         rv$modal_probs <- rep(equal_prob, n)
         for (j in seq_len(n))
           shiny::updateSliderInput(session, paste0("prob_", j), value = equal_prob)
