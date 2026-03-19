@@ -1,0 +1,198 @@
+---
+title: "Ranking-Based Prior Elicitation: Methods"
+author: "Robert Kubinec"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    theme: cosmo
+    code-fold: true
+#bibliography: references.bib
+---
+
+## Overview
+
+The **ranking mode** in `elicitcausal` offers an alternative to direct probability
+elicitation for populating a conditional probability table (CPT). Rather than
+asking users to specify exact conditional probabilities, ranking mode asks a
+simpler pair of questions:
+
+1. *Which parent variables increase the probability of the outcome, and which
+   decrease it?*
+2. *Among each group, which has the strongest effect?*
+
+These qualitative judgements are converted to a full CPT automatically via a
+logistic model with geometric-decay log-odds effects, described below.
+
+---
+
+## Setup and Notation
+
+Let $Y$ be a binary outcome node with $k$ binary parent nodes
+$\mathbf{X} = (X_1, \ldots, X_k)$, where each $X_j \in \{0, 1\}$. A CPT for
+$Y$ specifies $P(Y = 1 \mid \mathbf{x})$ for every combination
+$\mathbf{x} \in \{0,1\}^k$, i.e. $2^k$ values.
+
+The user provides three inputs:
+
+| Input | Symbol | Description |
+|-------|--------|-------------|
+| Base probability | $p_0 \in (0,1)$ | $P(Y=1)$ when all parents equal 0 |
+| Positive parents | $\mathcal{P}^+ = (X_{(1)}^+, \ldots)$ | Ordered strongest-first |
+| Negative parents | $\mathcal{P}^- = (X_{(1)}^-, \ldots)$ | Ordered strongest-first |
+
+Parents not placed in either list are assigned to a "no effect" category and
+receive a log-odds increment of zero.
+
+---
+
+## The Logistic Model
+
+For a given parent combination $\mathbf{x}$, the conditional probability is
+
+$$
+P(Y = 1 \mid \mathbf{x}) = \sigma\!\left(\alpha_0 + \sum_{j=1}^{k} \delta_j x_j\right),
+$$
+
+where $\sigma(u) = (1 + e^{-u})^{-1}$ is the logistic function, $\alpha_0$ is
+the baseline log-odds, and $\delta_j$ is the log-odds effect of parent $j$.
+
+### Baseline log-odds
+
+The user-specified base probability $p_0$ is the probability of $Y = 1$ when
+every parent equals 0:
+
+$$
+\alpha_0 = \text{logit}(p_0) = \log\!\frac{p_0}{1 - p_0}.
+$$
+
+To keep $\alpha_0$ finite, $p_0$ is clamped to $[0.01,\, 0.99]$.
+
+### Log-odds effects
+
+The effect assigned to each parent depends on its rank within its bucket:
+
+$$
+\delta_j = \begin{cases}
+  +\,2 \times 0.7^{r_j - 1} & \text{if } X_j \in \mathcal{P}^+ \text{ at rank } r_j, \\[4pt]
+  -\,2 \times 0.7^{r_j - 1} & \text{if } X_j \in \mathcal{P}^- \text{ at rank } r_j, \\[4pt]
+  0 & \text{if } X_j \in \mathcal{P}^0 \text{ (no effect).}
+\end{cases}
+$$
+
+The sequence $2,\; 1.4,\; 0.98,\; 0.686,\;\ldots$ is a geometric series with
+first term $\delta_1 = 2$ and common ratio $0.7$.
+
+---
+
+## Effect Size Calibration
+
+### Single active parent from a neutral base
+
+When $p_0 = 0.5$ (neutral base, $\alpha_0 = 0$), activating a single rank-$r$
+positive parent produces
+
+$$
+P(Y = 1 \mid X_{(r)}^+ = 1) = \sigma\!\left(2 \times 0.7^{r-1}\right).
+$$
+
+| Rank $r$ | Log-odds $\delta$ | $P(Y=1 \mid X=1)$ |
+|:--------:|:-----------------:|:-----------------:|
+| 1 | +2.000 | 0.881 |
+| 2 | +1.400 | 0.802 |
+| 3 | +0.980 | 0.727 |
+| 4 | +0.686 | 0.665 |
+| 5 | +0.480 | 0.618 |
+
+By symmetry, negative parents of the same rank push the probability equally far
+below 0.5 (e.g. rank 1 negative: $P = 0.119$).
+
+### Rationale for $\delta_1 = 2$ and ratio $0.7$
+
+The choice $\delta_1 = 2$ maps a neutral base to $P \approx 0.88$, a
+practically large but not extreme effect. The ratio $0.7$ ensures that adjacent
+ranks produce meaningfully different probabilities while still allowing
+lower-ranked parents to have a visible influence. Together they encode the
+intuition that the strongest effect dominates, with diminishing contributions
+from weaker parents.
+
+---
+
+## Multiple Active Parents
+
+Because the model is additive on the log-odds scale, the contribution of
+simultaneously active parents compounds:
+
+$$
+P(Y = 1 \mid \mathbf{x}) = \sigma\!\left(\alpha_0 + \sum_{j \,:\, x_j = 1} \delta_j\right).
+$$
+
+This means that if $X_{(1)}^+$ (rank-1 positive, $\delta = +2$) and $X_{(1)}^-$
+(rank-1 negative, $\delta = -2$) are both active, their effects cancel and the
+probability returns to the base $p_0$, regardless of the values of any no-effect
+parents.
+
+### Example: two positive parents
+
+With $p_0 = 0.3$, $X$ at rank 1 ($\delta = +2$), and $W$ at rank 2
+($\delta = +1.4$):
+
+| $X$ | $W$ | Log-odds | $P(Y=1)$ |
+|:---:|:---:|:--------:|:--------:|
+| 0 | 0 | $\alpha_0 = -0.847$ | 0.300 |
+| 1 | 0 | $-0.847 + 2.000 = 1.153$ | 0.760 |
+| 0 | 1 | $-0.847 + 1.400 = 0.553$ | 0.635 |
+| 1 | 1 | $-0.847 + 3.400 = 2.553$ | 0.928 |
+
+---
+
+## Properties and Limitations
+
+**Guaranteed base probability.** The model recovers $p_0$ exactly when all
+parents equal 0, because the log-odds effects of inactive parents are zero.
+
+**No monotonicity guarantee.** If a user places two parents in opposite buckets
+with similar ranks, the model can produce non-monotone CPT rows. This is
+intentional: it reflects the case where two opposing influences cancel.
+
+**Scale invariance.** The probabilities depend only on the *relative* ranks
+within each bucket, not on the number of parents assigned to the other bucket
+or left unassigned.
+
+**No interaction terms.** The additive log-odds structure assumes parent effects
+are independent on the log-odds scale. Interaction effects (e.g. $X$ matters
+only when $Z = 1$) cannot be expressed through the ranking interface; for such
+cases, the probability-slider mode should be used instead.
+
+---
+
+## Implementation
+
+The R implementation in `elicitcausal` (`.ranking_to_probs()`) evaluates the
+expression above over all $2^k$ rows of `expand.grid(parents, 0:1)`:
+
+```r
+ranking_to_probs <- function(base_prob, pos_parents, neg_parents, all_parents) {
+  logit    <- function(p) log(p / (1 - p))
+  logistic <- function(x) 1 / (1 + exp(-x))
+
+  base_prob  <- pmax(0.01, pmin(0.99, base_prob))
+  base_logit <- logit(base_prob)
+
+  # Geometric decay: rank r gets effect 2.0 * 0.7^(r - 1)
+  .effects <- function(n) if (n == 0L) numeric(0) else 2.0 * 0.7^(seq_len(n) - 1L)
+
+  all_effects <- setNames(rep(0, length(all_parents)), all_parents)
+  if (length(pos_parents) > 0L) all_effects[pos_parents] <-  .effects(length(pos_parents))
+  if (length(neg_parents) > 0L) all_effects[neg_parents] <- -.effects(length(neg_parents))
+
+  combos <- expand.grid(lapply(all_parents, function(.) c(0L, 1L)),
+                        KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE)
+  names(combos) <- all_parents
+
+  apply(combos, 1L, function(row)
+    logistic(base_logit + sum(all_effects * as.numeric(row)))
+  )
+}
+```

@@ -5,6 +5,9 @@
 #
 # Run with: source("scripts/causalqueries_recovery.R")
 
+# install elicitcausal from:
+# remotes::install_github("saudiwin/elicitcausal")
+
 library(dagitty)
 library(elicitcausal)
 library(CausalQueries)

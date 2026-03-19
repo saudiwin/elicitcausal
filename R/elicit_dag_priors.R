@@ -118,7 +118,7 @@
 #'   \code{\link{get_mutual_info}}
 #' @export
 elicit_dag_priors <- function(dag,
-                               mode       = c("probability", "likert"),
+                               mode       = c("likert", "probability"),
                                target     = NULL,
                                verbose    = TRUE,
                                .responses = NULL,

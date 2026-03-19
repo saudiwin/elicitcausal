@@ -24,7 +24,9 @@ Suggests:
     theorytools,
     shiny,
     ggdag,
-    ggplot2
+    ggplot2,
+    sortable,
+    visNetwork
 Config/testthat/edition: 3
 VignetteBuilder: quarto, knitr
 RoxygenNote: 7.3.2

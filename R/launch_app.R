@@ -1,16 +1,55 @@
 # Maximum parent combinations shown in a single modal (2^4 = 16 for 4 parents)
 .MAX_COMBOS <- 16L
 
-# Likert choices: display label -> probability string
-.LIKERT_CHOICES <- c(
-  "1 \u2014 Almost certainly not (~5%)"    = "0.05",
-  "2 \u2014 Very unlikely (~15%)"          = "0.15",
-  "3 \u2014 Unlikely (~30%)"               = "0.30",
-  "4 \u2014 About as likely as not (~50%)" = "0.50",
-  "5 \u2014 Likely (~70%)"                 = "0.70",
-  "6 \u2014 Very likely (~85%)"            = "0.85",
-  "7 \u2014 Almost certain (~95%)"         = "0.95"
-)
+
+# ===========================================================================
+# Ranking-mode probability derivation
+# ===========================================================================
+
+#' Convert parent rankings to a full CPT probability vector (ranking mode)
+#'
+#' Uses a logistic model with geometric-decay effects.  The first-ranked
+#' positive parent receives a log-odds increment of +2.0, the second +1.4
+#' (70% of the previous), and so on; negative parents receive the mirror
+#' decrements.  Parents placed in the "no effect" bucket contribute 0.
+#'
+#' @param base_prob Numeric in (0, 1). P(node = 1 | all parents = 0).
+#' @param pos_parents Character vector. Positive-effect parents ordered
+#'   strongest-first.
+#' @param neg_parents Character vector. Negative-effect parents ordered
+#'   strongest-first.
+#' @param all_parents Character vector. All parents in canonical CPT order.
+#' @return Numeric vector of length \code{2^length(all_parents)} giving
+#'   P(node = 1 | combo) for each row of \code{expand.grid(parents, 0:1)}.
+#' @keywords internal
+.ranking_to_probs <- function(base_prob, pos_parents, neg_parents, all_parents) {
+  logit    <- function(p) log(p / (1 - p))
+  logistic <- function(x) 1 / (1 + exp(-x))
+
+  base_prob  <- pmax(0.01, pmin(0.99, base_prob))
+  base_logit <- logit(base_prob)
+
+  # Geometric decay: rank r gets effect 2.0 * 0.7^(r-1)
+  .effects <- function(n) if (n == 0L) numeric(0) else 2.0 * 0.7^(seq_len(n) - 1L)
+
+  all_effects <- stats::setNames(rep(0, length(all_parents)), all_parents)
+  if (length(pos_parents) > 0L)
+    all_effects[pos_parents] <-  .effects(length(pos_parents))
+  if (length(neg_parents) > 0L)
+    all_effects[neg_parents] <- -.effects(length(neg_parents))
+
+  if (length(all_parents) == 0L) return(base_prob)
+
+  combos <- expand.grid(
+    lapply(all_parents, function(.) c(0L, 1L)),
+    KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE
+  )
+  names(combos) <- all_parents
+
+  apply(combos, 1L, function(row)
+    logistic(base_logit + sum(all_effects * as.numeric(row)))
+  )
+}
 
 
 #' Launch the elicitcausal Shiny application
@@ -28,14 +67,16 @@
 #' @section Input modes:
 #' \describe{
 #'   \item{\code{"probability"}}{Sliders in \eqn{[0,1]} coupled to sum to 1.}
-#'   \item{\code{"likert"}}{7-point verbal drop-down; values are normalised to
-#'     sum to 1 across parent combinations.}
+#'   \item{\code{"ranking"}}{Drag-and-drop bucket interface: place parent nodes
+#'     into \emph{positive} or \emph{negative} buckets and rank them by
+#'     strength.  A logistic model with geometric-decay weights converts the
+#'     ranking to a full CPT automatically.}
 #' }
 #'
 #' @param dag A \code{dagitty} object used as the initial DAG for both tabs,
 #'   or \code{NULL} to start with an empty text box.
 #' @param mode Character. Initial elicitation mode: \code{"probability"}
-#'   (default) or \code{"likert"}. Can be changed inside the app.
+#'   (default) or \code{"ranking"}. Can be changed inside the app.
 #' @param hide_close Logical. If \code{TRUE}, the "Close \u2014 Return to R"
 #'   button in the Causal Learning tab is hidden. Default \code{FALSE}.
 #' @param ... Additional arguments passed to \code{\link[shiny]{runApp}}.
@@ -54,7 +95,7 @@
 #' }
 #'
 #' @export
-launch_app <- function(dag = NULL, mode = c("probability", "likert"),
+launch_app <- function(dag = NULL, mode = c("probability", "ranking"),
                        hide_close = FALSE, ...) {
   mode <- match.arg(mode)
 
@@ -133,6 +174,14 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       .learning-status { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
       .stat-complete { background:#d5f5e3; color:#1e8449; }
       .stat-pending  { background:#fdebd0; color:#d35400; }
+      .rank-list { min-height: 60px !important; background: #f8f9fa !important;
+                   border: 1px solid #dee2e6 !important; border-radius: 4px !important; }
+      .rank-list-item { background: #fff; border: 1px solid #dee2e6; border-radius: 3px;
+                        padding: 5px 10px; margin: 3px 0; font-size: 0.88em;
+                        cursor: grab; font-weight: 600; }
+      .rank-list-title { font-weight: 600; font-size: 0.85em; padding: 4px 0 6px; }
+      .bucket-list-container { display: flex !important; gap: 10px !important; }
+      .bucket-list-container > div { flex: 1 !important; }
     "))),
 
     # ------------------------------------------------------------------
@@ -144,23 +193,117 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 
     # ------------------------------------------------------------------
     shiny::tabPanel(
-      "Causal Graph Pre-Study",
+      "Draw Causal Graph",
+      value = "tab_build",
+      .build_ui()
+    ),
+
+    # ------------------------------------------------------------------
+    shiny::tabPanel(
+      "Define Graph Pre-Study",
       value = "tab_pre",
       .elicit_ui("pre", dag_str, mode)
     ),
 
     # ------------------------------------------------------------------
     shiny::tabPanel(
-      "Causal Graph Post-Study",
+      "Define Graph Post-Study",
       value = "tab_post",
       .elicit_ui("post", dag_str, mode, locked_dag = TRUE)
     ),
 
     # ------------------------------------------------------------------
     shiny::tabPanel(
-      "Causal Learning from Graphs",
+      "Causal Learning (Pre/Post)",
       value = "tab_learning",
       .learning_ui()
+    )
+  )
+}
+
+
+# ===========================================================================
+# Graph-builder helpers
+# ===========================================================================
+
+#' Convert a visNetwork node/edge table to a dagitty string
+#' @keywords internal
+.vis_to_dagitty <- function(vis_nodes, vis_edges) {
+  if (is.null(vis_nodes) || nrow(vis_nodes) == 0L) return("")
+  id_to_label <- stats::setNames(vis_nodes$label, vis_nodes$id)
+  edge_parts <- if (!is.null(vis_edges) && nrow(vis_edges) > 0L)
+    vapply(seq_len(nrow(vis_edges)), function(i)
+      sprintf("%s -> %s",
+              id_to_label[[vis_edges$from[i]]],
+              id_to_label[[vis_edges$to[i]]]),
+      character(1L))
+  else character(0L)
+  connected_ids  <- unique(c(vis_edges$from, vis_edges$to))
+  isolated_nodes <- vis_nodes$label[!vis_nodes$id %in% connected_ids]
+  parts <- c(isolated_nodes, edge_parts)
+  if (length(parts) == 0L) return("")
+  sprintf("dag { %s }", paste(parts, collapse = "; "))
+}
+
+
+# ---------------------------------------------------------------------------
+# Tab 2: Build Graph
+# ---------------------------------------------------------------------------
+
+.build_ui <- function() {
+  shiny::fluidRow(
+    style = "padding: 14px 0;",
+
+    # ---- Canvas ----
+    shiny::column(8,
+      shiny::wellPanel(
+        shiny::h4("Causal Graph Canvas", style = "margin-top: 0;"),
+        shiny::div(
+          style = "font-size:0.82em; color:#555; margin-bottom:8px; line-height:1.5;",
+          shiny::icon("info-circle"),
+          " Use the toolbar above the canvas: click ",
+          shiny::strong("+ Add Node"), " to create a node (a name dialog will appear), ",
+          shiny::strong("\u2197 Add Edge"), " then drag between nodes to draw an arrow. ",
+          "Select a node and click ", shiny::strong("Edit Node"), " to rename it. ",
+          "Select a node or edge and click ", shiny::strong("\u2716 Delete"), " to remove it."
+        ),
+        if (requireNamespace("visNetwork", quietly = TRUE))
+          visNetwork::visNetworkOutput("build_network", height = "480px")
+        else
+          shiny::div(
+            style = "color:#c0392b; padding:12px; border:1px solid #e74c3c; border-radius:4px;",
+            shiny::icon("exclamation-triangle"),
+            " Package 'visNetwork' is required for the graph builder. ",
+            shiny::code("install.packages('visNetwork')")
+          )
+      )
+    ),
+
+    # ---- Controls ----
+    shiny::column(4,
+      shiny::wellPanel(
+        shiny::h4("Controls", style = "margin-top:0;"),
+        shiny::div(
+          class = "progress-tag",
+          style = "margin-bottom:10px;",
+          shiny::textOutput("build_node_count", inline = TRUE)
+        ),
+        shiny::hr(style = "margin:8px 0;"),
+        shiny::strong(style = "font-size:0.88em;", "DAG specification preview:"),
+        shiny::verbatimTextOutput("build_dagitty_preview"),
+        shiny::hr(style = "margin:8px 0;"),
+        shiny::actionButton(
+          "build_use_graph",
+          shiny::tagList(shiny::icon("arrow-right"), " Use This Graph in Pre-Study"),
+          class = "btn-primary btn-block",
+          style = "margin-bottom:6px;"
+        ),
+        shiny::actionButton(
+          "build_clear",
+          shiny::tagList(shiny::icon("trash"), " Clear Graph"),
+          class = "btn-danger btn-sm btn-block"
+        )
+      )
     )
   )
 }
@@ -201,41 +344,47 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
     shiny::h3("Workflow"),
     shiny::div(class = "step",
       shiny::span(class = "num", "1"),
-      shiny::strong("Build a causal graph."),
-      " Go to the ",
-      shiny::strong("Causal Graph Pre-Study"), " tab. You'll need to paste a causal graph
-       specification to get started. You can either get one from the visual graph builder at ", shiny::tags$a("dagitty.net", href="https://dagitty.net",
-                                            target="_blank"),
-       " or type one directly using dagitty notation, e.g. ", shiny::code('dag { X -> Y -> Z }'),
-       ". All variables in the graph are treated as binary
-       (0 / 1) variables to simplify the workflow."),
+      shiny::strong("Draw your causal DAG (Optional)."),
+      " The tool requires a causal graph in dagitty notation. If you don't know how to do that, go ahead and open the ", shiny::strong("Draw Causal Graph"), " tab. Click ",
+      shiny::strong("+ Add Node"), " in the canvas toolbar to create a variable
+       (a name dialog will appear). Then click ", shiny::strong("\u2197 Add Edge"),
+      " and drag from one node to another to draw a causal arrow. Select a node and
+       click ", shiny::strong("Edit Node"), " to rename it. When your graph is ready,
+       click ", shiny::strong("Use This Graph in Pre-Study"), " to load it
+       automatically into the pre-study tab."),
     shiny::div(class = "step",
       shiny::span(class = "num", "2"),
-      shiny::strong("Choose an elicitation mode."),
-      " Select ", shiny::em("Probability sliders"), " to drag values between
-       0% (never happens) and 100% (always happens), or ", shiny::em("Likert scale"), " to choose a verbal
-       description if you don't want to bother with putting in precise numbers. Sliders are coupled so that all values for a given node
-       sum to 1. Likert values are normalised to sum to 1 automatically."),
+      shiny::strong("Review the graph in the Pre-Study tab."),
+      " Go to the ", shiny::strong("Define Graph Pre-Study"), " tab and confirm the
+       causal graph specification looks correct. All variables in the graph are treated as
+       binary (0 / 1) to simplify the workflow."),
     shiny::div(class = "step",
       shiny::span(class = "num", "3"),
+      shiny::strong("Choose an elicitation mode."),
+      " Select ", shiny::em("Probability sliders"), " to drag values between
+       0% (never happens) and 100% (always happens), or ", shiny::em("Ranking"), " to drag parent nodes into
+       positive or negative relationship buckets and rank them by strength. Ranking is easier, especially with multiple variables, than direct probabilities but also less precise. Sliders are coupled so that all values for a given node
+       sum to 1. Ranking mode derives probabilities automatically from a logistic model."),
+    shiny::div(class = "step",
+      shiny::span(class = "num", "4"),
       shiny::strong("Input variable relationships."),
       " Click ", shiny::strong("Elicit Probabilities"), " and work through
        the modal dialogs, one per node, to add your prior beliefs about how variables are related to each other. Use Previous / Next to revise answers
        before clicking Done."),
     shiny::div(class = "step",
-      shiny::span(class = "num", "4"),
+      shiny::span(class = "num", "5"),
       shiny::strong("Download (optional)."),
       " After completing elicitation, use the download buttons to save the
        result as a Word/Latex/Markdown file or as an elicitcausal RDS file that can be further analyzed in R. You can also export as a CausalQueries and/or theorytools model RDS file."),
     shiny::div(class = "step",
-      shiny::span(class = "num", "5"),
+      shiny::span(class = "num", "6"),
       shiny::strong("Repeat for Post-Study."),
-      " Go to the ", shiny::strong("Causal Graph Post-Study"), " tab and
+      " Go to the ", shiny::strong("Define Graph Post-Study"), " tab and
        repeat the process after completing the study. You can either upload the file you saved to re-load the pre-study graph or input the pre-study graph probabilities manually (such as if you are interactively checking different research designs). You should update the graph with any new information that changes your beliefs about how variables are related to each other."),
     shiny::div(class = "step",
-      shiny::span(class = "num", "6"),
+      shiny::span(class = "num", "7"),
       shiny::strong("Compare."),
-      " Open the ", shiny::strong("Causal Learning from Graphs"), " tab to
+      " Open the ", shiny::strong("Causal Learning Pre/Post"), " tab to
        see the amount of causal learning that occurred from pre- to post-study. We use the entropy metric to provide a quantified summary of learning. An entropy reduction means we became more certain of the graph (type I causal learning), while an increase means we became less certain (type II causal learning)."),
 
     shiny::h3("Causal Graph/DAG specification format"),
@@ -373,7 +522,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
           shiny::radioButtons(ns("mode_select"),
                               label    = shiny::strong("Elicitation mode:"),
                               choices  = c("Probability sliders" = "probability",
-                                           "Likert scale"        = "likert"),
+                                           "Ranking"             = "ranking"),
                               selected = mode, inline = TRUE)
         ),
         shiny::hr(style = "margin: 8px 0;"),
@@ -417,8 +566,204 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 
     # Shared reactive state: the post tab writes an uploaded pre-study result
     # here so the pre tab can read it and update itself for entropy comparison.
-    rv_shared <- shiny::reactiveValues(imported_pre = NULL)
+    # build_dag is written by the Build Graph tab and read by the pre module.
+    rv_shared <- shiny::reactiveValues(imported_pre = NULL, build_dag = NULL)
 
+    # ------------------------------------------------------------------
+    # Tab 2: Build Graph server
+    # ------------------------------------------------------------------
+    .empty_nodes <- function()
+      data.frame(id = character(), label = character(), stringsAsFactors = FALSE)
+    .empty_edges <- function()
+      data.frame(id = character(), from = character(), to = character(),
+                 stringsAsFactors = FALSE)
+
+    rv_build <- shiny::reactiveValues(
+      nodes       = .empty_nodes(),
+      edges       = .empty_edges(),
+      render_tick = 0L          # bumped on Clear to force re-render
+    )
+
+    build_dag_r <- shiny::reactive(
+      .vis_to_dagitty(rv_build$nodes, rv_build$edges)
+    )
+
+    if (requireNamespace("visNetwork", quietly = TRUE)) {
+
+      # All manipulation actions handled via JS overlay dialogs — no prompt()
+      # needed (which is blocked in RStudio's embedded browser).
+      .add_node_js <- htmlwidgets::JS("function(data, callback) {
+        var ov = document.createElement('div');
+        ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;';
+        var bx = document.createElement('div');
+        bx.style.cssText = 'background:#fff;padding:24px 28px;border-radius:8px;min-width:260px;box-shadow:0 4px 20px rgba(0,0,0,0.3);font-family:inherit;';
+        bx.innerHTML = '<p style=\"margin:0 0 12px;font-weight:600;\">New node name</p><input id=\"__vn_inp\" type=\"text\" placeholder=\"e.g. X\" style=\"width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:14px;box-sizing:border-box;\"/><div style=\"text-align:right;margin-top:14px;\"><button id=\"__vn_cancel\" style=\"margin-right:8px;padding:5px 14px;\">Cancel</button><button id=\"__vn_ok\" style=\"padding:5px 14px;background:#2c3e50;color:white;border:none;border-radius:4px;cursor:pointer;\">Add</button></div>';
+        ov.appendChild(bx);
+        document.body.appendChild(ov);
+        var inp = document.getElementById('__vn_inp');
+        inp.focus();
+        function finish(label) {
+          document.body.removeChild(ov);
+          if (!label) return;
+          data.label = label;
+          Shiny.setInputValue('build_add_node', {id: String(data.id), label: label, ts: Date.now()}, {priority: 'event'});
+          callback(data);
+        }
+        document.getElementById('__vn_ok').onclick = function() { finish(inp.value.trim()); };
+        document.getElementById('__vn_cancel').onclick = function() { document.body.removeChild(ov); };
+        inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') finish(inp.value.trim()); });
+      }")
+
+      .edit_node_js <- htmlwidgets::JS("function(data, callback) {
+        var ov = document.createElement('div');
+        ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;';
+        var bx = document.createElement('div');
+        bx.style.cssText = 'background:#fff;padding:24px 28px;border-radius:8px;min-width:260px;box-shadow:0 4px 20px rgba(0,0,0,0.3);font-family:inherit;';
+        var cur = data.label || '';
+        bx.innerHTML = '<p style=\"margin:0 0 12px;font-weight:600;\">Rename node</p><input id=\"__ve_inp\" type=\"text\" style=\"width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:14px;box-sizing:border-box;\"/><div style=\"text-align:right;margin-top:14px;\"><button id=\"__ve_cancel\" style=\"margin-right:8px;padding:5px 14px;\">Cancel</button><button id=\"__ve_ok\" style=\"padding:5px 14px;background:#2c3e50;color:white;border:none;border-radius:4px;cursor:pointer;\">Rename</button></div>';
+        ov.appendChild(bx);
+        document.body.appendChild(ov);
+        var inp = document.getElementById('__ve_inp');
+        inp.value = cur; inp.focus(); inp.select();
+        function finish(label) {
+          document.body.removeChild(ov);
+          if (!label) { callback(null); return; }
+          data.label = label;
+          Shiny.setInputValue('build_rename_node', {id: String(data.id), label: label, ts: Date.now()}, {priority: 'event'});
+          callback(data);
+        }
+        document.getElementById('__ve_ok').onclick = function() { finish(inp.value.trim()); };
+        document.getElementById('__ve_cancel').onclick = function() { document.body.removeChild(ov); callback(null); };
+        inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') finish(inp.value.trim()); });
+      }")
+
+      .add_edge_js <- htmlwidgets::JS("function(data, callback) {
+        data.id = 'e' + Date.now().toString();
+        Shiny.setInputValue('build_add_edge',
+          {id: data.id, from: data.from, to: data.to, ts: Date.now()},
+          {priority: 'event'});
+        callback(data);
+      }")
+
+      .delete_node_js <- htmlwidgets::JS("function(data, callback) {
+        Shiny.setInputValue('build_delete',
+          {nodes: data.nodes, edges: data.edges, ts: Date.now()},
+          {priority: 'event'});
+        callback(data);
+      }")
+
+      .delete_edge_js <- htmlwidgets::JS("function(data, callback) {
+        Shiny.setInputValue('build_delete',
+          {nodes: [], edges: data.edges, ts: Date.now()},
+          {priority: 'event'});
+        callback(data);
+      }")
+
+      output$build_network <- visNetwork::renderVisNetwork({
+        rv_build$render_tick   # re-render when Clear is pressed
+        visNetwork::visNetwork(
+          nodes = .empty_nodes(),
+          edges = .empty_edges()
+        ) |>
+          visNetwork::visEdges(arrows = "to", color = list(color = "#95a5a6",
+                                                           highlight = "#e67e22")) |>
+          visNetwork::visNodes(
+            shape = "circle",
+            font  = list(color = "white", size = 16L, bold = TRUE),
+            color = list(background = "#2c3e50", border = "#1a252f",
+                         highlight  = list(background = "#e67e22",
+                                           border     = "#d35400"))
+          ) |>
+          visNetwork::visOptions(
+            manipulation = list(
+              enabled    = TRUE,
+              addNode    = .add_node_js,
+              editNode   = .edit_node_js,
+              addEdge    = .add_edge_js,
+              deleteNode = .delete_node_js,
+              deleteEdge = .delete_edge_js
+            )
+          ) |>
+          visNetwork::visInteraction(dragNodes = TRUE, dragView = TRUE,
+                                     zoomView  = TRUE) |>
+          visNetwork::visPhysics(stabilization = FALSE)
+      })
+
+      # --- Track node additions (vis.js already rendered it via callback) ---
+      shiny::observeEvent(input$build_add_node, {
+        n <- input$build_add_node
+        if (is.null(n$label) || !nzchar(n$label)) return()
+        rv_build$nodes <- rbind(
+          rv_build$nodes,
+          data.frame(id = n$id, label = n$label, stringsAsFactors = FALSE)
+        )
+      })
+
+      # --- Track node renames (vis.js already updated label via callback) ---
+      shiny::observeEvent(input$build_rename_node, {
+        n <- input$build_rename_node
+        if (is.null(n$id) || is.null(n$label) || !nzchar(n$label)) return()
+        rv_build$nodes$label[rv_build$nodes$id == n$id] <- n$label
+      })
+
+      # --- Track edge additions ---
+      shiny::observeEvent(input$build_add_edge, {
+        e <- input$build_add_edge
+        rv_build$edges <- rbind(
+          rv_build$edges,
+          data.frame(id = e$id, from = e$from, to = e$to, stringsAsFactors = FALSE)
+        )
+      })
+
+      # --- Track deletions ---
+      shiny::observeEvent(input$build_delete, {
+        d <- input$build_delete
+        if (!is.null(d$nodes) && length(d$nodes) > 0L)
+          rv_build$nodes <- rv_build$nodes[
+            !rv_build$nodes$id %in% d$nodes, , drop = FALSE]
+        if (!is.null(d$edges) && length(d$edges) > 0L)
+          rv_build$edges <- rv_build$edges[
+            !rv_build$edges$id %in% d$edges, , drop = FALSE]
+      })
+
+    }  # end if (requireNamespace("visNetwork"))
+
+    output$build_dagitty_preview <- shiny::renderText({
+      d <- build_dag_r()
+      if (!nzchar(d)) "No nodes yet." else d
+    })
+
+    output$build_node_count <- shiny::renderText({
+      n <- nrow(rv_build$nodes); e <- nrow(rv_build$edges)
+      sprintf("%d node%s, %d edge%s",
+              n, if (n == 1L) "" else "s",
+              e, if (e == 1L) "" else "s")
+    })
+
+    shiny::observeEvent(input$build_use_graph, {
+      dag_str <- shiny::isolate(build_dag_r())
+      if (!nzchar(trimws(dag_str))) {
+        shiny::showNotification("No nodes yet — add nodes to the canvas first.",
+                                type = "warning", duration = 4)
+        return()
+      }
+      rv_shared$build_dag <- dag_str
+      shiny::showNotification(
+        "Graph loaded into the Pre-Study tab.",
+        type = "message", duration = 4
+      )
+      shiny::updateNavbarPage(session, "main_tabs", selected = "tab_pre")
+    })
+
+    shiny::observeEvent(input$build_clear, {
+      rv_build$nodes       <- .empty_nodes()
+      rv_build$edges       <- .empty_edges()
+      rv_build$render_tick <- rv_build$render_tick + 1L
+    })
+
+    # ------------------------------------------------------------------
+    # Instantiate the two elicitation modules
+    # ------------------------------------------------------------------
     # Instantiate the two elicitation modules; each returns reactive(rv$result).
     # The post module starts with no DAG and syncs from pre_r when pre completes.
     pre_r  <- .elicit_server("pre",  dag, dag_info, mode,
@@ -702,7 +1047,8 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       n_active_combos = 0L,
       dag_error       = NULL,
       uploaded_pre    = NULL,
-      prefill_labels  = NULL   # list(node_labels = ..., value_labels = ...)
+      prefill_labels  = NULL,   # list(node_labels = ..., value_labels = ...)
+      ranking_state   = NULL    # list(node = list(base_prob, pos, neg)) for ranking mode
     )
 
     # ------------------------------------------------------------------
@@ -910,6 +1256,14 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
                    if (length(nodes_imp) == 1L) "" else "s", ")."),
             type = "message", duration = 5
           )
+        }, ignoreNULL = TRUE)
+
+        # When "Use This Graph" is clicked in the Build Graph tab, populate the
+        # dag_text textarea with the constructed dagitty string.
+        shiny::observeEvent(uploaded_override_rv$build_dag, {
+          bdag <- uploaded_override_rv$build_dag
+          if (is.null(bdag) || !nzchar(trimws(bdag))) return()
+          shiny::updateTextAreaInput(session, "dag_text", value = bdag)
         }, ignoreNULL = TRUE)
       }
 
@@ -1198,10 +1552,12 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
         return()
       }
       rv$current_idx <- 1L; rv$cpts <- NULL; rv$result <- NULL
-      .init_modal_state(rv, nodes, parents, 1L)
+      rv$ranking_state <- NULL
+      .init_modal_state(rv, nodes, parents, 1L, m)
       .show_node_modal(session, nodes, parents, m, rv$pending, 1L, n_nodes,
-                       labels      = shiny::isolate(labels_r()),
-                       node_labels = shiny::isolate(node_display_labels_r()))
+                       labels        = shiny::isolate(labels_r()),
+                       node_labels   = shiny::isolate(node_display_labels_r()),
+                       ranking_state = rv$ranking_state)
     })
 
     shiny::observeEvent(input$modal_next, {
@@ -1211,10 +1567,11 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       m       <- shiny::isolate(mode_r())
       .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, m)
       nxt <- rv$current_idx + 1L; rv$current_idx <- nxt
-      .init_modal_state(rv, nodes, parents, nxt)
+      .init_modal_state(rv, nodes, parents, nxt, m)
       .show_node_modal(session, nodes, parents, m, rv$pending, nxt, n_nodes,
-                       labels      = shiny::isolate(labels_r()),
-                       node_labels = shiny::isolate(node_display_labels_r()))
+                       labels        = shiny::isolate(labels_r()),
+                       node_labels   = shiny::isolate(node_display_labels_r()),
+                       ranking_state = rv$ranking_state)
     })
 
     shiny::observeEvent(input$modal_prev, {
@@ -1224,10 +1581,11 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       m       <- shiny::isolate(mode_r())
       .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, m)
       prv <- rv$current_idx - 1L; rv$current_idx <- prv
-      .init_modal_state(rv, nodes, parents, prv)
+      .init_modal_state(rv, nodes, parents, prv, m)
       .show_node_modal(session, nodes, parents, m, rv$pending, prv, n_nodes,
-                       labels      = shiny::isolate(labels_r()),
-                       node_labels = shiny::isolate(node_display_labels_r()))
+                       labels        = shiny::isolate(labels_r()),
+                       node_labels   = shiny::isolate(node_display_labels_r()),
+                       ranking_state = rv$ranking_state)
     })
 
     shiny::observeEvent(input$modal_done, {
@@ -1235,6 +1593,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
       parents <- shiny::isolate(parents_r())
       m       <- shiny::isolate(mode_r())
       .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, m)
+
       shiny::removeModal()
 
       cur_dag      <- shiny::isolate(dag_rv())
@@ -1291,19 +1650,34 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
     })
 
     shiny::observeEvent(input$modal_reset, {
-      n <- rv$n_active_combos
+      n     <- rv$n_active_combos
+      m_now <- shiny::isolate(mode_r())
       if (n <= 0L) return()
-      if (shiny::isolate(mode_r()) == "probability") {
-        # Root node (n == 1): max entropy for a binary variable is P = 0.5.
-        # Non-root (n > 1): sliders are coupled and sum to 1, so equal = 1/n.
+      if (m_now == "ranking") {
+        node <- shiny::isolate(nodes_r())[rv$current_idx]
+        pars <- shiny::isolate(parents_r())[[node]]
+        if (length(pars) > 0L) {
+          # Reset ranking state and re-render modal with all parents in "no effect"
+          if (is.null(rv$ranking_state)) rv$ranking_state <- list()
+          rv$ranking_state[[node]] <- list(base_prob = 0.5,
+                                           pos       = character(0),
+                                           neg       = character(0))
+          .show_node_modal(
+            session, shiny::isolate(nodes_r()), shiny::isolate(parents_r()),
+            m_now, rv$pending, rv$current_idx, shiny::isolate(n_nodes_r()),
+            labels        = shiny::isolate(labels_r()),
+            node_labels   = shiny::isolate(node_display_labels_r()),
+            ranking_state = rv$ranking_state
+          )
+        } else {
+          shiny::updateSliderInput(session, "prob_1", value = 0.5)
+        }
+      } else {
+        # probability mode
         equal_prob     <- if (n == 1L) 0.5 else 1 / n
         rv$modal_probs <- rep(equal_prob, n)
         for (j in seq_len(n))
           shiny::updateSliderInput(session, paste0("prob_", j), value = equal_prob)
-      } else {
-        # Likert: each combo is independent; max entropy per combo = ~50%
-        for (j in seq_len(n))
-          shiny::updateSelectInput(session, paste0("prob_", j), selected = "0.50")
       }
     })
 
@@ -1324,7 +1698,7 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 #' @keywords internal
 .show_node_modal <- function(session, nodes, parents, mode,
                               pending, idx, n_total, labels = NULL,
-                              node_labels = NULL) {
+                              node_labels = NULL, ranking_state = NULL) {
   ns   <- session$ns
   node <- nodes[idx]
   pars <- parents[[node]]
@@ -1336,10 +1710,125 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
     if (!is.null(lbl) && nzchar(trimws(lbl))) sprintf("%s (%s)", nd, lbl) else nd
   }
 
+  title_str <- if (length(pars) == 0L)
+    sprintf("Node: %s  \u2014  prior probability", .ndl(node))
+  else
+    sprintf("Node: %s  \u2502  Parents: %s", .ndl(node),
+            paste(vapply(pars, .ndl, character(1L)), collapse = ", "))
+
+  # ------------------------------------------------------------------
+  # Ranking mode, non-root: bucket_list UI
+  # ------------------------------------------------------------------
+  if (mode == "ranking" && length(pars) > 0L) {
+    saved_rs <- if (!is.null(ranking_state) && !is.null(ranking_state[[node]]))
+      ranking_state[[node]]
+    else
+      list(base_prob = 0.5, pos = character(0), neg = character(0))
+
+    pos_default   <- intersect(saved_rs$pos, pars)
+    neg_default   <- intersect(saved_rs$neg, pars)
+    noeff_default <- setdiff(pars, c(pos_default, neg_default))
+    base_default  <- as.numeric(saved_rs$base_prob %||% 0.5)
+
+    node_lbl0 <- .node_val_label(node, 0L, labels)
+    node_lbl1 <- .node_val_label(node, 1L, labels)
+
+    hint <- paste0(
+      "Drag parent nodes into the positive or negative buckets. ",
+      "Reorder within each bucket to rank by strength \u2014 ",
+      "the top item has the strongest effect. ",
+      "The base probability is P(", node, " = \u201c", node_lbl1, "\u201d) ",
+      "when all parents are at their \u201c", node_lbl0, "\u201d (0) value."
+    )
+
+    bucket_ui <- if (requireNamespace("sortable", quietly = TRUE)) {
+      sortable::bucket_list(
+        header      = NULL,
+        group_name  = ns("ranking_group"),
+        orientation = "horizontal",
+        sortable::add_rank_list(
+          text     = "\u2715 No effect",
+          labels   = as.list(noeff_default),
+          input_id = ns("rank_no_effect")
+        ),
+        sortable::add_rank_list(
+          text     = "\u2191 Positive effect  (parent \u2191 \u2192 outcome \u2191)",
+          labels   = as.list(pos_default),
+          input_id = ns("rank_positive")
+        ),
+        sortable::add_rank_list(
+          text     = "\u2193 Negative effect  (parent \u2191 \u2192 outcome \u2193)",
+          labels   = as.list(neg_default),
+          input_id = ns("rank_negative")
+        )
+      )
+    } else {
+      shiny::div(
+        style = "color:#c0392b; padding:10px;",
+        shiny::icon("exclamation-triangle"),
+        " Package 'sortable' is required for ranking mode.",
+        shiny::br(),
+        shiny::code("install.packages('sortable')")
+      )
+    }
+
+    modal_body <- shiny::tagList(
+      shiny::div(
+        class = "prob-row",
+        shiny::p(
+          sprintf("In the population you are studying, how likely is %s to be \u201c%s\u201d when all parents are at their \u201c%s\u201d value?",
+                  node, node_lbl1, node_lbl0),
+          style = "font-weight:bold; color:#000; font-size:1.05em; margin:0 0 4px 0;"
+        ),
+        shiny::sliderInput(
+          ns("rank_base_prob"),
+          sprintf("P(%s = \u201c%s\u201d | all parents = \u201c%s\u201d):", node, node_lbl1, node_lbl0),
+          min = 0, max = 1, step = 0.01, value = base_default, width = "100%"
+        )
+      ),
+      shiny::hr(style = "margin: 8px 0 10px;"),
+      shiny::p(
+        style = "font-size:0.82em; color:#555; margin-bottom:8px;",
+        "Rank 1 (top of bucket) = strongest effect; lower items = weaker effects."
+      ),
+      bucket_ui
+    )
+
+    shiny::showModal(shiny::modalDialog(
+      title = shiny::div(
+        style = "display:flex;justify-content:space-between;align-items:center;",
+        shiny::strong(title_str),
+        shiny::span(class = "progress-tag", sprintf("%d of %d", idx, n_total))
+      ),
+      shiny::p(class = "text-muted", style = "margin-bottom:6px;", hint),
+      shiny::actionButton(ns("modal_reset"),
+                          "\u21ba Reset (clear all buckets)",
+                          class = "btn-default btn-sm",
+                          title = "Moves all parents back to 'No effect' and resets base probability to 0.5"),
+      shiny::hr(style = "margin:10px 0 14px;"),
+      modal_body,
+      footer = shiny::tagList(
+        shiny::actionButton(ns("modal_cancel"), "Cancel",
+                            class = "btn-default pull-left", icon = shiny::icon("times")),
+        if (idx > 1L)
+          shiny::actionButton(ns("modal_prev"), "\u2190 Previous", class = "btn-default"),
+        if (idx < n_total)
+          shiny::actionButton(ns("modal_next"), "Next \u2192", class = "btn-primary")
+        else
+          shiny::actionButton(ns("modal_done"), "\u2713 Done", class = "btn-success")
+      ),
+      size = "l", easyClose = FALSE
+    ))
+    return(invisible(NULL))
+  }
+
+  # ------------------------------------------------------------------
+  # Probability mode (or ranking-mode root node): slider rows
+  # ------------------------------------------------------------------
   combos <- if (length(pars) > 0L)
     stats::setNames(
-      expand.grid(lapply(pars, function(.) c(0L,1L)),
-                  KEEP.OUT.ATTRS=FALSE, stringsAsFactors=FALSE),
+      expand.grid(lapply(pars, function(.) c(0L, 1L)),
+                  KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE),
       pars
     ) else data.frame()
 
@@ -1365,74 +1854,52 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 
     val <- if (!is.null(saved[[i]])) as.numeric(saved[[i]]) else 0.5
     shiny::div(class = "prob-row",
-      # Label sentence sits above the input control
       shiny::p(lbl_sentence,
-               style = "font-weight: bold;
-                        color: #000;
-                        font-size: 1.1em;
-                        margin: 0 0 4px 0;"),
-      if (mode == "probability") {
-        shiny::tagList(
-          shiny::sliderInput(ns(paste0("prob_", i)), prob_label,
-                             min = 0, max = 1, step = 0.01, value = val,
-                             width = "100%"),
-          shiny::div(
-            style = "display:flex; justify-content:space-between;
-                      font-weight: 700;
-                      color: black;
-                     font-size:0.76em; margin:-10px 0 4px 0;",
-            shiny::span("Never Happens"),
-            shiny::span("Always Happens")
-          ),
-          shiny::uiOutput(ns(paste0("bar_", i))),
-          shiny::div(class = "comp-text",
-                     shiny::textOutput(ns(paste0("comp_", i)), inline = TRUE))
-        )
-      } else {
-        nearest_key <- names(LIKERT_PROBS)[which.min(abs(LIKERT_PROBS - val))]
-        shiny::selectInput(ns(paste0("prob_", i)), prob_label,
-                           choices  = .LIKERT_CHOICES,
-                           selected = as.character(LIKERT_PROBS[nearest_key]),
-                           width    = "100%")
-      }
+               style = "font-weight: bold; color: #000; font-size: 1.1em; margin: 0 0 4px 0;"),
+      shiny::tagList(
+        shiny::sliderInput(ns(paste0("prob_", i)), prob_label,
+                           min = 0, max = 1, step = 0.01, value = val,
+                           width = "100%"),
+        shiny::div(
+          style = "display:flex; justify-content:space-between;
+                   font-weight: 700; color: black;
+                   font-size:0.76em; margin:-10px 0 4px 0;",
+          shiny::span("Never Happens"),
+          shiny::span("Always Happens")
+        ),
+        shiny::uiOutput(ns(paste0("bar_", i))),
+        shiny::div(class = "comp-text",
+                   shiny::textOutput(ns(paste0("comp_", i)), inline = TRUE))
+      )
     )
   })
 
-  title_str <- if (length(pars) == 0L)
-    sprintf("Node: %s  \u2014  prior probability", .ndl(node))
-  else
-    sprintf("Node: %s  \u2502  Parents: %s", .ndl(node),
-            paste(vapply(pars, .ndl, character(1L)), collapse = ", "))
-
-  hint <- if (mode == "probability")
-    "Drag each slider to set the probability that the node equals 1. Sliders are coupled and sum to 1."
-  else
-    "Choose the verbal probability that best describes each conditional probability."
+  hint <- "Drag each slider to set the probability that the node equals 1. Sliders are coupled and sum to 1."
 
   shiny::showModal(shiny::modalDialog(
     title = shiny::div(
       style = "display:flex;justify-content:space-between;align-items:center;",
       shiny::strong(title_str),
-      shiny::span(class="progress-tag", sprintf("%d of %d", idx, n_total))
+      shiny::span(class = "progress-tag", sprintf("%d of %d", idx, n_total))
     ),
-    shiny::p(class="text-muted", style="margin-bottom:6px;", hint),
+    shiny::p(class = "text-muted", style = "margin-bottom:6px;", hint),
     shiny::actionButton(ns("modal_reset"),
                         "\u21ba Reset to Maximum Uncertainty (Entropy)",
                         class = "btn-default btn-sm",
                         title = "Sets all probabilities to equal values, maximising entropy for this node"),
-    shiny::hr(style="margin:10px 0 14px;"),
+    shiny::hr(style = "margin:10px 0 14px;"),
     do.call(shiny::tagList, input_rows),
     footer = shiny::tagList(
       shiny::actionButton(ns("modal_cancel"), "Cancel",
-                          class="btn-default pull-left", icon=shiny::icon("times")),
+                          class = "btn-default pull-left", icon = shiny::icon("times")),
       if (idx > 1L)
-        shiny::actionButton(ns("modal_prev"), "\u2190 Previous", class="btn-default"),
+        shiny::actionButton(ns("modal_prev"), "\u2190 Previous", class = "btn-default"),
       if (idx < n_total)
-        shiny::actionButton(ns("modal_next"), "Next \u2192", class="btn-primary")
+        shiny::actionButton(ns("modal_next"), "Next \u2192", class = "btn-primary")
       else
-        shiny::actionButton(ns("modal_done"), "\u2713 Done", class="btn-success")
+        shiny::actionButton(ns("modal_done"), "\u2713 Done", class = "btn-success")
     ),
-    size="m", easyClose=FALSE
+    size = "m", easyClose = FALSE
   ))
 }
 
@@ -1440,30 +1907,66 @@ launch_app <- function(dag = NULL, mode = c("probability", "likert"),
 #' @keywords internal
 .save_modal_inputs <- function(rv, nodes, parents, input, idx, mode) {
   node     <- nodes[idx]
-  n_combos <- max(1L, 2L^length(parents[[node]]))
+  pars     <- parents[[node]]
+  n_combos <- max(1L, 2L^length(pars))
+
+  # Ranking mode with at least one parent: derive probs from bucket state
+  if (mode == "ranking" && length(pars) > 0L) {
+    pos_parents <- input[["rank_positive"]] %||% character(0)
+    neg_parents <- input[["rank_negative"]] %||% character(0)
+    base_prob   <- as.numeric(input[["rank_base_prob"]] %||% 0.5)
+    # Persist ranking state for Previous navigation
+    if (is.null(rv$ranking_state)) rv$ranking_state <- list()
+    rv$ranking_state[[node]] <- list(
+      base_prob = base_prob,
+      pos       = pos_parents,
+      neg       = neg_parents
+    )
+    probs <- .ranking_to_probs(base_prob, pos_parents, neg_parents, pars)
+    rv$pending[[node]] <- as.list(probs)
+    return(invisible(NULL))
+  }
+
+  # Probability mode: use coupled slider values stored in rv$modal_probs
   if (mode == "probability" && n_combos > 1L &&
       !is.null(rv$modal_probs) && length(rv$modal_probs) >= n_combos) {
     rv$pending[[node]] <- as.list(rv$modal_probs[seq_len(n_combos)])
-  } else {
-    rv$pending[[node]] <- lapply(seq_len(n_combos), function(i) {
-      raw <- input[[paste0("prob_", i)]]
-      if (is.null(raw)) 1/n_combos else as.numeric(raw)
-    })
+    return(invisible(NULL))
   }
+
+  # Fallback: read prob_1..n directly (probability root, ranking root)
+  rv$pending[[node]] <- lapply(seq_len(n_combos), function(i) {
+    raw <- input[[paste0("prob_", i)]]
+    if (is.null(raw)) 1/n_combos else as.numeric(raw)
+  })
 }
 
 
 #' @keywords internal
-.init_modal_state <- function(rv, nodes, parents, idx) {
+.init_modal_state <- function(rv, nodes, parents, idx, mode = "probability") {
   node     <- nodes[idx]
-  n_combos <- max(1L, 2L^length(parents[[node]]))
-  probs    <- as.numeric(unlist(rv$pending[[node]]))
+  pars     <- parents[[node]]
+  n_combos <- max(1L, 2L^length(pars))
+  rv$n_active_combos <- n_combos
+
+  # Ranking mode non-root: initialise ranking_state if needed; no modal_probs
+  if (mode == "ranking" && length(pars) > 0L) {
+    if (is.null(rv$ranking_state)) rv$ranking_state <- list()
+    if (is.null(rv$ranking_state[[node]])) {
+      rv$ranking_state[[node]] <- list(base_prob = 0.5,
+                                       pos       = character(0),
+                                       neg       = character(0))
+    }
+    return(invisible(NULL))
+  }
+
+  # probability / ranking-root: set modal_probs from pending
+  probs <- as.numeric(unlist(rv$pending[[node]]))
   if (n_combos > 1L) {
     s <- sum(probs)
-    probs <- if (s > 1e-9) probs/s else rep(1/n_combos, n_combos)
+    probs <- if (s > 1e-9) probs / s else rep(1/n_combos, n_combos)
   }
-  rv$modal_probs     <- probs[seq_len(n_combos)]
-  rv$n_active_combos <- n_combos
+  rv$modal_probs <- probs[seq_len(n_combos)]
 }
 
 
