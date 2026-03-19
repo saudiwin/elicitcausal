@@ -96,7 +96,7 @@ format_label_sentence <- function(node, parent_values, labels) {
 
   if (length(parent_values) == 0L) {
     # Root / exogenous node
-    sprintf("In general, how likely is %s to be \"%s\"?", node, node_lbl)
+    sprintf("In the population you study, how likely is %s to be \"%s\"?", node, node_lbl)
   } else {
     # Endogenous node: "Suppose that … . In that case, how likely is it that Y will be '…'?"
     parent_parts <- vapply(names(parent_values), function(p) {

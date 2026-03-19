@@ -95,7 +95,7 @@
 #' }
 #'
 #' @export
-launch_app <- function(dag = NULL, mode = c("probability", "ranking"),
+launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
                        hide_close = FALSE, ...) {
   mode <- match.arg(mode)
 
@@ -1733,13 +1733,35 @@ launch_app <- function(dag = NULL, mode = c("probability", "ranking"),
     node_lbl0 <- .node_val_label(node, 0L, labels)
     node_lbl1 <- .node_val_label(node, 1L, labels)
 
+    # A terminal (sink) node appears in no other node's parent list
+    is_terminal <- !node %in% unlist(unname(parents))
+
     hint <- paste0(
-      "Drag parent nodes into the positive or negative buckets. ",
-      "Reorder within each bucket to rank by strength \u2014 ",
-      "the top item has the strongest effect. ",
-      "The base probability is P(", node, " = \u201c", node_lbl1, "\u201d) ",
-      "when all parents are at their \u201c", node_lbl0, "\u201d (0) value."
+      "Drag causal variables into the positive or negative buckets. ",
+      "Rank variables within each bucket where the top item has the strongest effect. ",
+      "Set the baseline probability below the buckets. ",
+      "If you are unsure of the baseline probability, leave it at 0.5."
     )
+
+    if (is_terminal) {
+      base_question <- sprintf(
+        "(Optional) What is the probability that the outcome %s is \u201c%s\u201d when all of its causes are at their \u201c%s\u201d (baseline) value?",
+        node, node_lbl1, node_lbl0
+      )
+      base_slider_label <- sprintf(
+        "Baseline P(%s = \u201c%s\u201d | all causes = \u201c%s\u201d):",
+        node, node_lbl1, node_lbl0
+      )
+    } else {
+      base_question <- sprintf(
+        "In the population you are studying, how likely is %s to be \u201c%s\u201d when all of its direct causes are at their \u201c%s\u201d value?",
+        node, node_lbl1, node_lbl0
+      )
+      base_slider_label <- sprintf(
+        "Baseline P(%s = \u201c%s\u201d | all direct causes = \u201c%s\u201d):",
+        node, node_lbl1, node_lbl0
+      )
+    }
 
     bucket_ui <- if (requireNamespace("sortable", quietly = TRUE)) {
       sortable::bucket_list(
@@ -1752,12 +1774,12 @@ launch_app <- function(dag = NULL, mode = c("probability", "ranking"),
           input_id = ns("rank_no_effect")
         ),
         sortable::add_rank_list(
-          text     = "\u2191 Positive effect  (parent \u2191 \u2192 outcome \u2191)",
+          text     = "\u2191 Positive effect  (variable \u2191 outcome \u2191)",
           labels   = as.list(pos_default),
           input_id = ns("rank_positive")
         ),
         sortable::add_rank_list(
-          text     = "\u2193 Negative effect  (parent \u2191 \u2192 outcome \u2193)",
+          text     = "\u2193 Negative effect  (variable \u2191 outcome \u2193)",
           labels   = as.list(neg_default),
           input_id = ns("rank_negative")
         )
@@ -1773,25 +1795,24 @@ launch_app <- function(dag = NULL, mode = c("probability", "ranking"),
     }
 
     modal_body <- shiny::tagList(
-      shiny::div(
-        class = "prob-row",
-        shiny::p(
-          sprintf("In the population you are studying, how likely is %s to be \u201c%s\u201d when all parents are at their \u201c%s\u201d value?",
-                  node, node_lbl1, node_lbl0),
-          style = "font-weight:bold; color:#000; font-size:1.05em; margin:0 0 4px 0;"
-        ),
-        shiny::sliderInput(
-          ns("rank_base_prob"),
-          sprintf("P(%s = \u201c%s\u201d | all parents = \u201c%s\u201d):", node, node_lbl1, node_lbl0),
-          min = 0, max = 1, step = 0.01, value = base_default, width = "100%"
-        )
-      ),
-      shiny::hr(style = "margin: 8px 0 10px;"),
       shiny::p(
         style = "font-size:0.82em; color:#555; margin-bottom:8px;",
         "Rank 1 (top of bucket) = strongest effect; lower items = weaker effects."
       ),
-      bucket_ui
+      bucket_ui,
+      shiny::hr(style = "margin: 12px 0 8px;"),
+      shiny::div(
+        class = "prob-row",
+        shiny::p(
+          base_question,
+          style = "font-weight:bold; color:#000; font-size:1.05em; margin:0 0 4px 0;"
+        ),
+        shiny::sliderInput(
+          ns("rank_base_prob"),
+          base_slider_label,
+          min = 0, max = 1, step = 0.01, value = base_default, width = "100%"
+        )
+      )
     )
 
     shiny::showModal(shiny::modalDialog(
