@@ -1745,11 +1745,11 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
 
     if (is_terminal) {
       base_question <- sprintf(
-        "(Optional) What is the probability that the outcome %s is \u201c%s\u201d when all of its causes are at their \u201c%s\u201d (baseline) value?",
+        "(Optional) What is the baseline probability that the outcome %s is \u201c%s\u201d when all of its causes are zero (i.e., at their low value)?",
         node, node_lbl1, node_lbl0
       )
       base_slider_label <- sprintf(
-        "Baseline P(%s = \u201c%s\u201d | all causes = \u201c%s\u201d):",
+        "Baseline P(%s = \u201c%s\u201d | all causes = zero (low value)):",
         node, node_lbl1, node_lbl0
       )
     } else {
