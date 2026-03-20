@@ -325,9 +325,13 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
     style = "padding: 20px 10px;",
 
     shiny::h2("How to Use elicitcausal", style = "margin-top: 0; color: #2c3e50;"),
+          shiny::HTML('
+    <div style="margin: 20px 0; text-align: center;">
+      <iframe width="560" height="315" src="https://www.youtube.com/embed/QVilkMTmIvY?si=sazeOuW7P6ZxxKB_" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+    </div>'),
     shiny::p(
     "This app helps you construct a causal graph along with priors for the relationships between variables
-    in the causal graph. It is designed for non-experts by using a question-and-answer format to 
+    in the causal graph (see instructional video above and workflow below). It is designed for non-experts by using a question-and-answer format to 
     populate the causal graph with the researcher's knowledge about the research question. Constructing a causal graph before doing a study can help you understand how much 
     causal learning you can gain from a variety of interventions--especially if you preregister the pre-study causal graph. You can then compare the pre-study graph to a post-study graph
     to gain very precise measures of causal learning after doing a study (using entropy as a metric). Of course, the
@@ -1904,7 +1908,7 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
       )
     } else {
       base_question <- sprintf(
-        "In the population you are studying, how likely is %s to be \u201c%s\u201d when all of its direct causes are at their \u201c%s\u201d value?",
+        "In the population you are studying, how likely is %s to be \u201c%s\u201d when all of its direct causes are zero (lowest value)?",
         node, node_lbl1, node_lbl0
       )
       base_slider_label <- sprintf(
