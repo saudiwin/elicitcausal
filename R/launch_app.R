@@ -182,6 +182,12 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
       .rank-list-title { font-weight: 600; font-size: 0.85em; padding: 4px 0 6px; }
       .bucket-list-container { display: flex !important; gap: 10px !important; }
       .bucket-list-container > div { flex: 1 !important; }
+    ")),
+    shiny::tags$script(shiny::HTML("
+      Shiny.addCustomMessageHandler('trigger_download', function(id) {
+        var el = document.getElementById(id);
+        if (el) el.click();
+      });
     "))),
 
     # ------------------------------------------------------------------
@@ -567,7 +573,8 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
     # Shared reactive state: the post tab writes an uploaded pre-study result
     # here so the pre tab can read it and update itself for entropy comparison.
     # build_dag is written by the Build Graph tab and read by the pre module.
-    rv_shared <- shiny::reactiveValues(imported_pre = NULL, build_dag = NULL)
+    rv_shared <- shiny::reactiveValues(imported_pre = NULL, build_dag = NULL,
+                                       tracking_done = FALSE)
 
     # ------------------------------------------------------------------
     # Tab 2: Build Graph server
@@ -767,9 +774,11 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
     # Instantiate the two elicitation modules; each returns reactive(rv$result).
     # The post module starts with no DAG and syncs from pre_r when pre completes.
     pre_r  <- .elicit_server("pre",  dag, dag_info, mode,
-                              uploaded_override_rv = rv_shared)
+                              uploaded_override_rv = rv_shared,
+                              session_tracking_rv  = rv_shared)
     post_r <- .elicit_server("post", NULL, NULL, mode, pre_result_r = pre_r,
-                              uploaded_override_rv = rv_shared)
+                              uploaded_override_rv = rv_shared,
+                              session_tracking_rv  = rv_shared)
 
     # ------------------------------------------------------------------
     # Tab 4: Causal Learning summary
@@ -920,10 +929,13 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
     # ------------------------------------------------------------------
     # Learning tab: download entropy comparison table
     # ------------------------------------------------------------------
+    rv_learn_track <- shiny::reactiveValues(pending_download = NULL)
+
     output$learning_download_ui <- shiny::renderUI({
       pre  <- pre_r()
       post <- post_r()
       if (is.null(pre) || is.null(post)) return(NULL)
+      tracking <- .tracking_enabled()
       shiny::div(
         class = "dl-section",
         style = "margin-top:14px; padding-top:10px; border-top:1px solid #dee2e6;",
@@ -939,12 +951,62 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
               "LaTeX (.tex)"        = "tex"
             )
           ),
-          shiny::downloadButton("download_learning", "Download Table",
-                                class = "btn-default btn-sm",
-                                icon  = shiny::icon("table"))
+          shiny::downloadButton(
+            "download_learning", "Download Table",
+            class = "btn-default btn-sm",
+            icon  = shiny::icon("table"),
+            style = if (tracking)
+              paste("position:absolute; opacity:0; pointer-events:none;",
+                    "width:0; height:0; overflow:hidden; padding:0; border:0;")
+            else NULL
+          ),
+          if (tracking)
+            shiny::actionButton(
+              "dl_action_learning", "Download Table",
+              class = "btn-default btn-sm",
+              icon  = shiny::icon("table")
+            )
         )
       )
     })
+
+    shiny::observeEvent(input$dl_action_learning, {
+      if (isTRUE(rv_shared$tracking_done)) {
+        session$sendCustomMessage("trigger_download", "download_learning")
+      } else {
+        rv_learn_track$pending_download <- "download_learning"
+        ns_learn <- function(id) paste0(id, "_learn")
+        shiny::showModal(.tracking_modal(ns_learn))
+      }
+    }, ignoreInit = TRUE)
+
+    shiny::observeEvent(input$tracking_confirm_learn, {
+      dl_id <- rv_learn_track$pending_download
+      if (!is.null(dl_id)) {
+        .log_tracking_event(
+          action      = dl_id,
+          industry    = input$tracking_industry_learn  %||% "",
+          user_status = input$tracking_status_learn    %||% "",
+          purpose     = input$tracking_purpose_learn   %||% "",
+          region      = input$tracking_region_learn    %||% "",
+          tab         = "learning"
+        )
+        rv_shared$tracking_done <- TRUE
+        shiny::removeModal()
+        session$sendCustomMessage("trigger_download", dl_id)
+        rv_learn_track$pending_download <- NULL
+      }
+    }, ignoreInit = TRUE)
+
+    shiny::observeEvent(input$tracking_skip_learn, {
+      dl_id <- rv_learn_track$pending_download
+      rv_shared$tracking_done <- TRUE
+      shiny::removeModal()
+      if (!is.null(dl_id)) {
+        session$sendCustomMessage("trigger_download", dl_id)
+        rv_learn_track$pending_download <- NULL
+      }
+    }, ignoreInit = TRUE)
 
     output$download_learning <- shiny::downloadHandler(
       filename = function() {
@@ -1014,7 +1076,8 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
 #'   \code{elicit_dag_result} or \code{NULL}).
 #' @keywords internal
 .elicit_server <- function(id, dag, dag_info, mode, pre_result_r = NULL,
-                            uploaded_override_rv = NULL) {
+                            uploaded_override_rv = NULL,
+                            session_tracking_rv  = NULL) {
   shiny::moduleServer(id, function(input, output, session) {
 
     ns <- session$ns   # needed for dynamically generated IDs in renderUI
@@ -1048,7 +1111,8 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
       dag_error       = NULL,
       uploaded_pre    = NULL,
       prefill_labels  = NULL,   # list(node_labels = ..., value_labels = ...)
-      ranking_state   = NULL    # list(node = list(base_prob, pos, neg)) for ranking mode
+      ranking_state   = NULL,   # list(node = list(base_prob, pos, neg)) for ranking mode
+      pending_download = NULL   # download button id waiting after tracking modal
     )
 
     # ------------------------------------------------------------------
@@ -1462,6 +1526,7 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
       has_cq     <- requireNamespace("CausalQueries", quietly = TRUE)
       has_tt     <- requireNamespace("theorytools",   quietly = TRUE)
       has_quarto <- requireNamespace("quarto",        quietly = TRUE)
+      tracking   <- .tracking_enabled()
 
       doc_choices <- c("Quarto + CSV (.zip)" = "qmd_bundle")
       if (has_quarto) {
@@ -1471,20 +1536,42 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
                          "Word (.docx)"   = "docx")
       }
 
+      # Helper: render a download button, intercepted by tracking modal when enabled.
+      # When tracking is on the real downloadButton is visually hidden but kept in
+      # the DOM so JS .click() can still trigger Shiny's download mechanism.
+      # We avoid display:none because some browsers block navigation on hidden anchors.
+      .dl_btn <- function(dl_id, label, icon_name, action_id = NULL) {
+        real_btn <- shiny::downloadButton(
+          session$ns(dl_id), label,
+          class = "btn-default btn-sm",
+          icon  = shiny::icon(icon_name),
+          style = if (tracking)
+            paste("position:absolute; opacity:0; pointer-events:none;",
+                  "width:0; height:0; overflow:hidden; padding:0; border:0;")
+          else NULL
+        )
+        if (!tracking) return(real_btn)
+        shiny::tagList(
+          real_btn,
+          shiny::actionButton(
+            session$ns(action_id %||% paste0("dl_action_", dl_id)),
+            label,
+            class = "btn-default btn-sm",
+            icon  = shiny::icon(icon_name)
+          )
+        )
+      }
+
       shiny::div(
         class = "dl-section",
         shiny::strong(style="font-size:0.9em;", "Download R objects:"),
         shiny::br(),
-        shiny::downloadButton(session$ns("download_result"), "Result (.rds)",
-                              class="btn-default btn-sm", icon=shiny::icon("download")),
+        .dl_btn("download_result", "Result (.rds)",          "download"),
         if (has_cq)
-          shiny::downloadButton(session$ns("download_cq"), "CausalQueries (.rds)",
-                                class="btn-default btn-sm", icon=shiny::icon("download")),
+          .dl_btn("download_cq",   "CausalQueries (.rds)",   "download"),
         if (has_tt)
-          shiny::downloadButton(session$ns("download_tt"), "theorytools (.rds)",
-                                class="btn-default btn-sm", icon=shiny::icon("download")),
-        shiny::downloadButton(session$ns("download_plot"), "Graph (.jpg)",
-                              class="btn-default btn-sm", icon=shiny::icon("image")),
+          .dl_btn("download_tt",   "theorytools (.rds)",     "download"),
+        .dl_btn("download_plot",   "Graph (.jpg)",           "image"),
         shiny::hr(style="margin:8px 0 4px;"),
         shiny::strong(style="font-size:0.9em;", "Download preregistration document:"),
         shiny::br(),
@@ -1494,11 +1581,74 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
                              choices  = doc_choices,
                              selected = "qmd_bundle",
                              width    = "220px"),
-          shiny::downloadButton(session$ns("download_doc"), "Download Document",
-                                class="btn-default btn-sm", icon=shiny::icon("file-alt"))
+          .dl_btn("download_doc", "Download Document", "file-alt")
         )
       )
     })
+
+    # ------------------------------------------------------------------
+    # Tracking modal: intercept each download action button
+    # ------------------------------------------------------------------
+
+    # Helper: show modal or skip straight to download if already answered
+    .show_dl_tracking_modal <- function(dl_id) {
+      full_id <- session$ns(dl_id)
+      if (!is.null(session_tracking_rv) && isTRUE(session_tracking_rv$tracking_done)) {
+        session$sendCustomMessage("trigger_download", full_id)
+      } else {
+        rv$pending_download <- full_id
+        shiny::showModal(.tracking_modal(ns))
+      }
+    }
+
+    shiny::observeEvent(input$dl_action_download_result, {
+      .show_dl_tracking_modal("download_result")
+    }, ignoreInit = TRUE)
+    shiny::observeEvent(input$dl_action_download_cq, {
+      .show_dl_tracking_modal("download_cq")
+    }, ignoreInit = TRUE)
+    shiny::observeEvent(input$dl_action_download_tt, {
+      .show_dl_tracking_modal("download_tt")
+    }, ignoreInit = TRUE)
+    shiny::observeEvent(input$dl_action_download_plot, {
+      .show_dl_tracking_modal("download_plot")
+    }, ignoreInit = TRUE)
+    shiny::observeEvent(input$dl_action_download_doc, {
+      .show_dl_tracking_modal("download_doc")
+    }, ignoreInit = TRUE)
+
+    # Confirm: log, mark done for the session, then trigger download
+    shiny::observeEvent(input$tracking_confirm, {
+      dl_id <- rv$pending_download
+      if (!is.null(dl_id)) {
+        action <- sub("^[^-]+-", "", dl_id)
+        .log_tracking_event(
+          action      = action,
+          industry    = input$tracking_industry  %||% "",
+          user_status = input$tracking_status    %||% "",
+          purpose     = input$tracking_purpose   %||% "",
+          region      = input$tracking_region    %||% "",
+          tab         = id
+        )
+        if (!is.null(session_tracking_rv))
+          session_tracking_rv$tracking_done <- TRUE
+        shiny::removeModal()
+        session$sendCustomMessage("trigger_download", dl_id)
+        rv$pending_download <- NULL
+      }
+    }, ignoreInit = TRUE)
+
+    # Skip: mark done for the session and proceed without logging
+    shiny::observeEvent(input$tracking_skip, {
+      dl_id <- rv$pending_download
+      if (!is.null(session_tracking_rv))
+        session_tracking_rv$tracking_done <- TRUE
+      shiny::removeModal()
+      if (!is.null(dl_id)) {
+        session$sendCustomMessage("trigger_download", dl_id)
+        rv$pending_download <- NULL
+      }
+    }, ignoreInit = TRUE)
 
     # ------------------------------------------------------------------
     # CPT display (inline tables, no pre-registration needed)
@@ -1987,7 +2137,12 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
     s <- sum(probs)
     probs <- if (s > 1e-9) probs / s else rep(1/n_combos, n_combos)
   }
-  rv$modal_probs <- probs[seq_len(n_combos)]
+  probs <- probs[seq_len(n_combos)]
+  rv$modal_probs  <- probs
+  # Keep pending in sync so slider initial values match rv$modal_probs exactly,
+  # preventing the coupled-slider observer from firing on modal open (flicker bug
+  # when switching from ranking to probability mode).
+  rv$pending[[node]] <- as.list(probs)
 }
 
 

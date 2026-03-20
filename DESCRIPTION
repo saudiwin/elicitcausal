@@ -26,7 +26,9 @@ Suggests:
     ggdag,
     ggplot2,
     sortable,
-    visNetwork
+    visNetwork,
+    DBI,
+    RPostgres
 Config/testthat/edition: 3
 VignetteBuilder: quarto, knitr
 RoxygenNote: 7.3.2
