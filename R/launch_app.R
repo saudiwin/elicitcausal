@@ -1423,7 +1423,9 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
         cii <- ci; pid <- paste0("prob_", cii)
 
         shiny::observeEvent(input[[pid]], {
-          if (shiny::isolate(mode_r()) != "probability") return()
+          cur_node <- shiny::isolate(nodes_r())[rv$current_idx]
+          eff_m    <- rv$node_modes[[cur_node]] %||% shiny::isolate(mode_r())
+          if (eff_m != "probability") return()
           n <- shiny::isolate(rv$n_active_combos)
           if (n <= 1L || cii > n) return()
           new_val <- as.numeric(input[[pid]])
@@ -1706,7 +1708,7 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
         return()
       }
       rv$current_idx <- 1L; rv$cpts <- NULL; rv$result <- NULL
-      rv$ranking_state <- NULL
+      rv$ranking_state <- NULL; rv$node_modes <- list()
       .init_modal_state(rv, nodes, parents, 1L, m)
       .show_node_modal(session, nodes, parents, m, rv$pending, 1L, n_nodes,
                        labels        = shiny::isolate(labels_r()),
@@ -1719,10 +1721,12 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
       parents <- shiny::isolate(parents_r())
       n_nodes <- shiny::isolate(n_nodes_r())
       m       <- shiny::isolate(mode_r())
-      .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, m)
+      cur_m   <- rv$node_modes[[nodes[rv$current_idx]]] %||% m
+      .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, cur_m)
       nxt <- rv$current_idx + 1L; rv$current_idx <- nxt
-      .init_modal_state(rv, nodes, parents, nxt, m)
-      .show_node_modal(session, nodes, parents, m, rv$pending, nxt, n_nodes,
+      nxt_m <- rv$node_modes[[nodes[nxt]]] %||% m
+      .init_modal_state(rv, nodes, parents, nxt, nxt_m)
+      .show_node_modal(session, nodes, parents, nxt_m, rv$pending, nxt, n_nodes,
                        labels        = shiny::isolate(labels_r()),
                        node_labels   = shiny::isolate(node_display_labels_r()),
                        ranking_state = rv$ranking_state)
@@ -1733,10 +1737,12 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
       parents <- shiny::isolate(parents_r())
       n_nodes <- shiny::isolate(n_nodes_r())
       m       <- shiny::isolate(mode_r())
-      .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, m)
+      cur_m   <- rv$node_modes[[nodes[rv$current_idx]]] %||% m
+      .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, cur_m)
       prv <- rv$current_idx - 1L; rv$current_idx <- prv
-      .init_modal_state(rv, nodes, parents, prv, m)
-      .show_node_modal(session, nodes, parents, m, rv$pending, prv, n_nodes,
+      prv_m <- rv$node_modes[[nodes[prv]]] %||% m
+      .init_modal_state(rv, nodes, parents, prv, prv_m)
+      .show_node_modal(session, nodes, parents, prv_m, rv$pending, prv, n_nodes,
                        labels        = shiny::isolate(labels_r()),
                        node_labels   = shiny::isolate(node_display_labels_r()),
                        ranking_state = rv$ranking_state)
@@ -1746,7 +1752,8 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
       nodes   <- shiny::isolate(nodes_r())
       parents <- shiny::isolate(parents_r())
       m       <- shiny::isolate(mode_r())
-      .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, m)
+      cur_m   <- rv$node_modes[[nodes[rv$current_idx]]] %||% m
+      .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, cur_m)
 
       shiny::removeModal()
 
@@ -1754,19 +1761,21 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
       cur_dag_info <- shiny::isolate(dag_info_rv())
 
       normalized_nodes <- Filter(function(node) {
-        pars  <- parents[[node]]
-        probs <- as.numeric(unlist(rv$pending[[node]]))
-        m == "likert" && length(pars) > 0L &&
+        node_m <- rv$node_modes[[node]] %||% m
+        pars   <- parents[[node]]
+        probs  <- as.numeric(unlist(rv$pending[[node]]))
+        node_m == "likert" && length(pars) > 0L &&
           length(probs) > 1L && abs(sum(probs) - 1) > 1e-6
       }, nodes)
 
       cpts <- lapply(nodes, function(node) {
-        pars  <- parents[[node]]
-        probs <- as.numeric(unlist(rv$pending[[node]]))
+        node_m <- rv$node_modes[[node]] %||% m
+        pars   <- parents[[node]]
+        probs  <- as.numeric(unlist(rv$pending[[node]]))
         if (length(pars) == 0L) {
           cpt <- data.frame(prob = probs[1L])
         } else {
-          probs      <- .normalize_if_likert(probs, m)
+          probs      <- .normalize_if_likert(probs, node_m)
           cpt        <- expand.grid(lapply(pars, function(.) c(0L,1L)),
                                     KEEP.OUT.ATTRS=FALSE, stringsAsFactors=FALSE)
           names(cpt) <- pars; cpt$prob <- probs
@@ -1804,8 +1813,9 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
     })
 
     shiny::observeEvent(input$modal_reset, {
-      n     <- rv$n_active_combos
-      m_now <- shiny::isolate(mode_r())
+      n        <- rv$n_active_combos
+      m_global <- shiny::isolate(mode_r())
+      m_now    <- rv$node_modes[[shiny::isolate(nodes_r())[rv$current_idx]]] %||% m_global
       if (n <= 0L) return()
       if (m_now == "ranking") {
         node <- shiny::isolate(nodes_r())[rv$current_idx]
@@ -1834,6 +1844,25 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
           shiny::updateSliderInput(session, paste0("prob_", j), value = equal_prob)
       }
     })
+
+    shiny::observeEvent(input$modal_mode, {
+      nodes   <- shiny::isolate(nodes_r())
+      parents <- shiny::isolate(parents_r())
+      n_nodes <- shiny::isolate(n_nodes_r())
+      m       <- shiny::isolate(mode_r())
+      node    <- nodes[rv$current_idx]
+      old_m   <- rv$node_modes[[node]] %||% m
+      new_m   <- input$modal_mode
+      if (is.null(new_m) || new_m == old_m) return()
+      .save_modal_inputs(rv, nodes, parents, input, rv$current_idx, old_m)
+      if (is.null(rv$node_modes)) rv$node_modes <- list()
+      rv$node_modes[[node]] <- new_m
+      .init_modal_state(rv, nodes, parents, rv$current_idx, new_m)
+      .show_node_modal(session, nodes, parents, new_m, rv$pending, rv$current_idx, n_nodes,
+                       labels        = shiny::isolate(labels_r()),
+                       node_labels   = shiny::isolate(node_display_labels_r()),
+                       ranking_state = rv$ranking_state)
+    }, ignoreInit = TRUE)
 
     # Return the result as a reactive for the parent server
     shiny::reactive(rv$result)
@@ -1917,6 +1946,10 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
       )
     }
 
+    # Named list: name = node id returned to Shiny, value = display string
+    .labeled <- function(nodes)
+      stats::setNames(as.list(vapply(nodes, .ndl, character(1L))), nodes)
+
     bucket_ui <- if (requireNamespace("sortable", quietly = TRUE)) {
       sortable::bucket_list(
         header      = NULL,
@@ -1924,17 +1957,17 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
         orientation = "horizontal",
         sortable::add_rank_list(
           text     = "\u2715 No effect",
-          labels   = as.list(noeff_default),
+          labels   = .labeled(noeff_default),
           input_id = ns("rank_no_effect")
         ),
         sortable::add_rank_list(
           text     = "\u2191 Positive effect  (variable \u2191 outcome \u2191)",
-          labels   = as.list(pos_default),
+          labels   = .labeled(pos_default),
           input_id = ns("rank_positive")
         ),
         sortable::add_rank_list(
           text     = "\u2193 Negative effect  (variable \u2191 outcome \u2193)",
-          labels   = as.list(neg_default),
+          labels   = .labeled(neg_default),
           input_id = ns("rank_negative")
         )
       )
@@ -1973,7 +2006,20 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
       title = shiny::div(
         style = "display:flex;justify-content:space-between;align-items:center;",
         shiny::strong(title_str),
-        shiny::span(class = "progress-tag", sprintf("%d of %d", idx, n_total))
+        shiny::div(
+          style = "display:flex;align-items:center;gap:12px;",
+          shiny::div(
+            style = "margin-bottom:0;",
+            shiny::selectInput(
+              ns("modal_mode"),
+              label = NULL,
+              choices = c("Ranking" = "ranking", "Probability" = "probability"),
+              selected = mode,
+              width = "140px"
+            )
+          ),
+          shiny::span(class = "progress-tag", sprintf("%d of %d", idx, n_total))
+        )
       ),
       shiny::p(class = "text-muted", style = "margin-bottom:6px;", hint),
       shiny::actionButton(ns("modal_reset"),
@@ -2055,7 +2101,20 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
     title = shiny::div(
       style = "display:flex;justify-content:space-between;align-items:center;",
       shiny::strong(title_str),
-      shiny::span(class = "progress-tag", sprintf("%d of %d", idx, n_total))
+      shiny::div(
+        style = "display:flex;align-items:center;gap:12px;",
+        shiny::div(
+          style = "margin-bottom:0;",
+          shiny::selectInput(
+            ns("modal_mode"),
+            label = NULL,
+            choices = c("Probability" = "probability", "Ranking" = "ranking"),
+            selected = mode,
+            width = "140px"
+          )
+        ),
+        shiny::span(class = "progress-tag", sprintf("%d of %d", idx, n_total))
+      )
     ),
     shiny::p(class = "text-muted", style = "margin-bottom:6px;", hint),
     shiny::actionButton(ns("modal_reset"),
