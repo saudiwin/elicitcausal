@@ -1,30 +1,38 @@
 # demo_ranking_to_probs.R
 # Demonstrates how .ranking_to_probs() converts user rankings to a CPT.
 #
-# The function uses a logistic model with geometric-decay log-odds effects:
-#   Rank 1 positive parent: +2.00 log-odds
-#   Rank 2 positive parent: +1.40 log-odds  (70% of previous)
-#   Rank 3 positive parent: +0.98 log-odds
-#   ...mirrored for negative parents (same magnitudes, negative sign)
+# The function uses a logistic model with geometric-decay log-odds effects.
+# The top-ranked parent in each bucket shifts P(node=1) away from base_prob
+# by at most `max_effect` (in probability units); lower ranks receive 70% of
+# the log-odds magnitude of the rank above them.
+#   Rank 1: log-odds effect = logit(base_prob +/- max_effect) - logit(base_prob)
+#   Rank 2: 70% of rank 1's log-odds magnitude
+#   Rank 3: 70% of rank 2's log-odds magnitude
+#   ...mirrored (opposite sign) for negative parents
 #   "No effect" parents:     0.00 log-odds
 
 # ---------------------------------------------------------------------------
 # Copy of the internal function (not exported)
 # ---------------------------------------------------------------------------
-ranking_to_probs <- function(base_prob, pos_parents, neg_parents, all_parents) {
+ranking_to_probs <- function(base_prob, pos_parents, neg_parents, all_parents,
+                              max_effect = 0.4) {
   logit    <- function(p) log(p / (1 - p))
   logistic <- function(x) 1 / (1 + exp(-x))
 
   base_prob  <- pmax(0.01, pmin(0.99, base_prob))
   base_logit <- logit(base_prob)
+  max_effect <- pmax(0.01, pmin(0.49, max_effect))
 
-  .effects <- function(n) if (n == 0L) numeric(0) else 2.0 * 0.7^(seq_len(n) - 1L)
+  top_pos <- logit(pmin(0.99, base_prob + max_effect)) - base_logit
+  top_neg <- base_logit - logit(pmax(0.01, base_prob - max_effect))
+
+  .effects <- function(n, top) if (n == 0L) numeric(0) else top * 0.7^(seq_len(n) - 1L)
 
   all_effects <- stats::setNames(rep(0, length(all_parents)), all_parents)
   if (length(pos_parents) > 0L)
-    all_effects[pos_parents] <-  .effects(length(pos_parents))
+    all_effects[pos_parents] <-  .effects(length(pos_parents), top_pos)
   if (length(neg_parents) > 0L)
-    all_effects[neg_parents] <- -.effects(length(neg_parents))
+    all_effects[neg_parents] <- -.effects(length(neg_parents), top_neg)
 
   if (length(all_parents) == 0L) return(base_prob)
 
@@ -59,7 +67,7 @@ show_cpt(
   neg_parents = character(0),
   all_parents = "X"
 )
-# Expected: P(Y=1|X=0) ≈ 0.20, P(Y=1|X=1) ≈ 0.72  (rank-1 +2.0 log-odds)
+# Expected: P(Y=1|X=0) ≈ 0.20, P(Y=1|X=1) ≈ 0.60  (rank-1 shift = +max_effect = 0.40)
 
 # ---------------------------------------------------------------------------
 # Example 2: One negative parent
@@ -72,7 +80,7 @@ show_cpt(
   neg_parents = "Z",
   all_parents = "Z"
 )
-# Expected: P(Y=1|Z=0) ≈ 0.80, P(Y=1|Z=1) ≈ 0.28
+# Expected: P(Y=1|Z=0) ≈ 0.80, P(Y=1|Z=1) ≈ 0.40  (rank-1 shift = -max_effect = 0.40)
 
 # ---------------------------------------------------------------------------
 # Example 3: Two positive parents ranked by strength
@@ -85,7 +93,7 @@ show_cpt(
   neg_parents = character(0),
   all_parents = c("X", "W")
 )
-# X effect: +2.00 log-odds; W effect: +1.40 log-odds
+# X (rank 1) gets the full top-rank log-odds effect; W (rank 2) gets 70% of it
 # All four combos: (X=0,W=0), (X=1,W=0), (X=0,W=1), (X=1,W=1)
 
 # ---------------------------------------------------------------------------
@@ -102,14 +110,20 @@ show_cpt(
 # W contributes 0 log-odds regardless of its value
 
 # ---------------------------------------------------------------------------
-# Effect size illustration: rank vs. resulting probability shift from 0.5
+# Effect size illustration: rank vs. resulting probability shift from 0.5,
+# shown for two choices of max_effect
 # ---------------------------------------------------------------------------
-cat("\n\nEffect of rank on P(Y=1 | single parent = 1), base = 0.50\n")
-cat(strrep("-", 50), "\n")
 logistic <- function(x) 1 / (1 + exp(-x))
-for (r in 1:5) {
-  lo <- 2.0 * 0.7^(r - 1L)          # log-odds increment for rank r
-  p  <- logistic(lo)                 # base_logit = logit(0.5) = 0, so P = logistic(lo)
-  cat(sprintf("  Rank %d: log-odds effect = %+.3f  ->  P(Y=1 | parent=1) = %.3f\n",
-              r, lo, p))
+logit    <- function(p) log(p / (1 - p))
+for (max_effect in c(0.4, 0.2)) {
+  cat(sprintf("\n\nEffect of rank on P(Y=1 | single parent = 1), base = 0.50, max_effect = %.2f\n",
+              max_effect))
+  cat(strrep("-", 65), "\n")
+  top <- logit(0.5 + max_effect) - logit(0.5)   # base_logit = logit(0.5) = 0
+  for (r in 1:5) {
+    lo <- top * 0.7^(r - 1L)          # log-odds increment for rank r
+    p  <- logistic(lo)
+    cat(sprintf("  Rank %d: log-odds effect = %+.3f  ->  P(Y=1 | parent=1) = %.3f\n",
+                r, lo, p))
+  }
 }

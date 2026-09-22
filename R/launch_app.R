@@ -8,10 +8,12 @@
 
 #' Convert parent rankings to a full CPT probability vector (ranking mode)
 #'
-#' Uses a logistic model with geometric-decay effects.  The first-ranked
-#' positive parent receives a log-odds increment of +2.0, the second +1.4
-#' (70% of the previous), and so on; negative parents receive the mirror
-#' decrements.  Parents placed in the "no effect" bucket contribute 0.
+#' Uses a logistic model with geometric-decay effects.  The top-ranked
+#' positive parent shifts the probability up by \code{max_effect} over
+#' \code{base_prob} (converted to a log-odds increment); the top-ranked
+#' negative parent shifts it down by \code{max_effect}.  Lower ranks receive
+#' 70% of the log-odds magnitude of the rank above them.  Parents placed in
+#' the "no effect" bucket contribute 0.
 #'
 #' @param base_prob Numeric in (0, 1). P(node = 1 | all parents = 0).
 #' @param pos_parents Character vector. Positive-effect parents ordered
@@ -19,24 +21,35 @@
 #' @param neg_parents Character vector. Negative-effect parents ordered
 #'   strongest-first.
 #' @param all_parents Character vector. All parents in canonical CPT order.
+#' @param max_effect Numeric in (0, 0.49). The largest allowed shift in
+#'   probability (relative to \code{base_prob}) produced by the top-ranked
+#'   parent in each bucket; lower ranks decay geometrically within that
+#'   envelope.
 #' @return Numeric vector of length \code{2^length(all_parents)} giving
 #'   P(node = 1 | combo) for each row of \code{expand.grid(parents, 0:1)}.
 #' @keywords internal
-.ranking_to_probs <- function(base_prob, pos_parents, neg_parents, all_parents) {
+.ranking_to_probs <- function(base_prob, pos_parents, neg_parents, all_parents,
+                               max_effect = 0.4) {
   logit    <- function(p) log(p / (1 - p))
   logistic <- function(x) 1 / (1 + exp(-x))
 
   base_prob  <- pmax(0.01, pmin(0.99, base_prob))
   base_logit <- logit(base_prob)
+  max_effect <- pmax(0.01, pmin(0.49, max_effect))
 
-  # Geometric decay: rank r gets effect 2.0 * 0.7^(r-1)
-  .effects <- function(n) if (n == 0L) numeric(0) else 2.0 * 0.7^(seq_len(n) - 1L)
+  # Top-rank log-odds magnitude, derived so the resulting probability shift
+  # from base_prob equals max_effect in each direction.
+  top_pos <- logit(pmin(0.99, base_prob + max_effect)) - base_logit
+  top_neg <- base_logit - logit(pmax(0.01, base_prob - max_effect))
+
+  # Geometric decay: rank r gets effect top * 0.7^(r-1)
+  .effects <- function(n, top) if (n == 0L) numeric(0) else top * 0.7^(seq_len(n) - 1L)
 
   all_effects <- stats::setNames(rep(0, length(all_parents)), all_parents)
   if (length(pos_parents) > 0L)
-    all_effects[pos_parents] <-  .effects(length(pos_parents))
+    all_effects[pos_parents] <-  .effects(length(pos_parents), top_pos)
   if (length(neg_parents) > 0L)
-    all_effects[neg_parents] <- -.effects(length(neg_parents))
+    all_effects[neg_parents] <- -.effects(length(neg_parents), top_neg)
 
   if (length(all_parents) == 0L) return(base_prob)
 
@@ -1115,7 +1128,7 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
       dag_error       = NULL,
       uploaded_pre    = NULL,
       prefill_labels  = NULL,   # list(node_labels = ..., value_labels = ...)
-      ranking_state   = NULL,   # list(node = list(base_prob, pos, neg)) for ranking mode
+      ranking_state   = NULL,   # list(node = list(base_prob, pos, neg, max_effect)) for ranking mode
       pending_download = NULL   # download button id waiting after tracking modal
     )
 
@@ -1823,9 +1836,10 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
         if (length(pars) > 0L) {
           # Reset ranking state and re-render modal with all parents in "no effect"
           if (is.null(rv$ranking_state)) rv$ranking_state <- list()
-          rv$ranking_state[[node]] <- list(base_prob = 0.5,
-                                           pos       = character(0),
-                                           neg       = character(0))
+          rv$ranking_state[[node]] <- list(base_prob  = 0.5,
+                                           pos        = character(0),
+                                           neg        = character(0),
+                                           max_effect = 0.4)
           .show_node_modal(
             session, shiny::isolate(nodes_r()), shiny::isolate(parents_r()),
             m_now, rv$pending, rv$current_idx, shiny::isolate(n_nodes_r()),
@@ -1912,6 +1926,7 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
     neg_default   <- intersect(saved_rs$neg, pars)
     noeff_default <- setdiff(pars, c(pos_default, neg_default))
     base_default  <- as.numeric(saved_rs$base_prob %||% 0.5)
+    max_eff_default <- as.numeric(saved_rs$max_effect %||% 0.4)
 
     node_lbl0 <- .node_val_label(node, 0L, labels)
     node_lbl1 <- .node_val_label(node, 1L, labels)
@@ -1998,6 +2013,21 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
           ns("rank_base_prob"),
           base_slider_label,
           min = 0, max = 1, step = 0.01, value = base_default, width = "100%"
+        )
+      ),
+      shiny::div(
+        class = "prob-row",
+        shiny::p(
+          "How large should the strongest cause's effect be allowed to get? ",
+          "This sets the maximum shift in probability, above or below the baseline, ",
+          "produced by the top-ranked variable in each bucket. Weaker-ranked variables ",
+          "are placed proportionally closer to the baseline within this range.",
+          style = "font-weight:bold; color:#000; font-size:1.05em; margin:12px 0 4px 0;"
+        ),
+        shiny::sliderInput(
+          ns("rank_max_effect"),
+          "Maximum effect size (+/- probability over baseline):",
+          min = 0.05, max = 0.49, step = 0.01, value = max_eff_default, width = "100%"
         )
       )
     )
@@ -2149,14 +2179,16 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
     pos_parents <- input[["rank_positive"]] %||% character(0)
     neg_parents <- input[["rank_negative"]] %||% character(0)
     base_prob   <- as.numeric(input[["rank_base_prob"]] %||% 0.5)
+    max_effect  <- as.numeric(input[["rank_max_effect"]] %||% 0.4)
     # Persist ranking state for Previous navigation
     if (is.null(rv$ranking_state)) rv$ranking_state <- list()
     rv$ranking_state[[node]] <- list(
-      base_prob = base_prob,
-      pos       = pos_parents,
-      neg       = neg_parents
+      base_prob  = base_prob,
+      pos        = pos_parents,
+      neg        = neg_parents,
+      max_effect = max_effect
     )
-    probs <- .ranking_to_probs(base_prob, pos_parents, neg_parents, pars)
+    probs <- .ranking_to_probs(base_prob, pos_parents, neg_parents, pars, max_effect)
     rv$pending[[node]] <- as.list(probs)
     return(invisible(NULL))
   }
@@ -2187,9 +2219,10 @@ launch_app <- function(dag = NULL, mode = c("ranking", "probability"),
   if (mode == "ranking" && length(pars) > 0L) {
     if (is.null(rv$ranking_state)) rv$ranking_state <- list()
     if (is.null(rv$ranking_state[[node]])) {
-      rv$ranking_state[[node]] <- list(base_prob = 0.5,
-                                       pos       = character(0),
-                                       neg       = character(0))
+      rv$ranking_state[[node]] <- list(base_prob  = 0.5,
+                                       pos        = character(0),
+                                       neg        = character(0),
+                                       max_effect = 0.4)
     }
     return(invisible(NULL))
   }
